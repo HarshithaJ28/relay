@@ -1,0 +1,22 @@
+# Local development stack. NOTE: written but not yet executed in the build
+# environment (no Docker daemon there); the tests run against native
+# PostgreSQL 16 and RabbitMQ installs instead. Verify this file on a machine
+# with Docker before relying on it.
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: relay-dev-only
+      POSTGRES_DB: relay
+    ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d relay"]
+      interval: 5s
+      retries: 10
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    ports: ["5672:5672", "15672:15672"]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      retries: 10
