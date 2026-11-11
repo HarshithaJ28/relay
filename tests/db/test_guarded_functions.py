@@ -34,10 +34,15 @@ def claim(connect, delivery_id, seq, dtok, ltok):
                          (delivery_id, seq, dtok, ltok, LEASE)).fetchall()
 
 
-def record(connect, delivery_id, ltok, outcome="success", code=200, err=None, retry="10 seconds"):
+def record_status(connect, delivery_id, ltok, outcome="success", code=200, err=None, retry="10 seconds"):
+    """The resulting status, or None when the call was rejected."""
     with connect("relay_worker") as c:
         return c.execute("SELECT delivery.record_attempt(%s,%s,%s,%s,%s,%s::interval)",
                          (delivery_id, ltok, outcome, code, err, retry)).fetchone()[0]
+
+
+def record(connect, *args, **kwargs):
+    return record_status(connect, *args, **kwargs) is not None
 
 
 def attempts(factory, delivery_id):
@@ -234,6 +239,26 @@ def claimed(connect, factory):
     ltok = tok()
     assert len(claim(connect, d, seq, dtok, ltok)) == 1
     return d, ltok
+
+
+def test_record_reports_the_resulting_status(connect, factory):
+    d, ltok = claimed(connect, factory)
+    assert record_status(connect, d, ltok, "retry", 500, "http_5xx") == "scheduled"
+    with factory._su() as su:                                        # skip the backoff wait
+        su.execute("UPDATE delivery.deliveries SET next_attempt_at = now() WHERE id = %s", (d,))
+    seq, dtok = dispatch(connect, factory, d)
+    l2 = tok()
+    assert len(claim(connect, d, seq, dtok, l2)) == 1
+    assert record_status(connect, d, l2, "success") == "succeeded"
+    assert record_status(connect, d, l2, "success") is None          # rejected: nothing to report
+
+
+def test_twelfth_failure_reports_dead(connect, factory):
+    d = factory.delivery(attempt_count=11)
+    seq, dtok = dispatch(connect, factory, d)
+    ltok = tok()
+    assert len(claim(connect, d, seq, dtok, ltok)) == 1
+    assert record_status(connect, d, ltok, "retry", 500, "http_5xx") == "dead"
 
 
 def test_record_success_finishes_delivery(connect, factory):

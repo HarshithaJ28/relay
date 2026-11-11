@@ -164,7 +164,7 @@ def test_full_cycle_with_stalled_worker_after_publisher_crash(connect, factory, 
         with connect("relay_reaper") as r:
             assert r.execute("SELECT delivery.reclaim_expired(10)").fetchone()[0] == 1
         # the stalled worker wakes up: its result is fenced out
-        assert c.execute("SELECT delivery.record_attempt(%s,%s,'success',200,NULL,NULL)", (d, lease)).fetchone()[0] is False
+        assert c.execute("SELECT delivery.record_attempt(%s,%s,'success',200,NULL,NULL)", (d, lease)).fetchone()[0] is None
     with connect("postgres") as su:
         st = su.execute("SELECT status, attempt_count FROM delivery.deliveries WHERE id=%s", (d,)).fetchone()
     assert st == ("scheduled", 1)

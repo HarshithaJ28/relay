@@ -84,12 +84,12 @@ BEGIN
 END $$;
 
 -- Worker side, step 2: record the result. Fenced by the lease token.
--- Returns false (and changes nothing) for a wrong token, an already-finished
--- delivery, or one the reaper has reclaimed.
+-- Returns the delivery's new status, or NULL (changing nothing) for a wrong
+-- token, an already-finished delivery, or one the reaper has reclaimed.
 CREATE FUNCTION delivery.record_attempt(
   p_delivery_id uuid, p_lease_token bytea, p_outcome text,
   p_status_code int, p_error_class text, p_retry_after interval)
-RETURNS boolean
+RETURNS text
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
 DECLARE
   cur_count int;
@@ -109,7 +109,7 @@ BEGIN
   FROM delivery.deliveries
   WHERE id = p_delivery_id AND status = 'in_flight' AND lease_token_hash = sha256(p_lease_token)
   FOR UPDATE;
-  IF NOT FOUND THEN RETURN false; END IF;
+  IF NOT FOUND THEN RETURN NULL; END IF;
 
   n := cur_count + 1;
   IF p_outcome = 'success' THEN
@@ -134,7 +134,7 @@ BEGIN
       lease_token_hash = NULL, lease_until = NULL, dispatch_token_hash = NULL,
       last_error_class = final_error, updated_at = now()
   WHERE id = p_delivery_id;
-  RETURN true;
+  RETURN new_status;
 END $$;
 
 -- Reaper: reclaim deliveries whose lease expired. After this, the original
