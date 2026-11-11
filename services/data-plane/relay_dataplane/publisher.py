@@ -1,6 +1,6 @@
 """Outbox publisher.
 
-Reads unpublished outbox rows, publishes each to a RabbitMQ quorum queue with
+Takes unpublished outbox rows one at a time, publishes each to a RabbitMQ quorum queue with
 publisher confirms, and only after the broker confirms clears the raw dispatch
 token and sets published_at (AC-1). A crash anywhere leaves the row unpublished
 with its token intact, so the next run republishes the SAME token for the SAME
@@ -41,10 +41,16 @@ async def publish_pending(dsn: str, amqp_url: str, queue: str = QUEUE, batch: in
         channel = await connection.channel(publisher_confirms=True)
         await declare(channel, queue)
         with psycopg.connect(dsn, autocommit=False) as db:
-            rows = db.execute(
-                "SELECT id, delivery_id, dispatch_seq, dispatch_token FROM delivery.outbox "
-                "WHERE published_at IS NULL ORDER BY id LIMIT %s FOR UPDATE SKIP LOCKED", (batch,)).fetchall()
-            for i, (oid, delivery_id, seq, token) in enumerate(rows):
+            # Lock ONE row at a time. Locking a batch and committing per row would release the
+            # locks on the rows not yet published, and a second publisher would send them again.
+            while published < batch:
+                row = db.execute(
+                    "SELECT id, delivery_id, dispatch_seq, dispatch_token FROM delivery.outbox "
+                    "WHERE published_at IS NULL ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED").fetchone()
+                if row is None:
+                    db.commit()
+                    break
+                oid, delivery_id, seq, token = row
                 _crash("before_publish")
                 # With confirms on, this returns only after the broker has accepted
                 # (and, for a quorum queue, replicated and persisted) the message.
@@ -56,9 +62,9 @@ async def publish_pending(dsn: str, amqp_url: str, queue: str = QUEUE, batch: in
                 _crash("after_publish_before_mark")
                 db.execute("UPDATE delivery.outbox SET published_at = now(), dispatch_token = NULL WHERE id = %s",
                            (oid,))
-                db.commit()  # row lock released per row; a crash loses at most the unmarked row
+                db.commit()
                 published += 1
-                if i == 1:
+                if published == 2:
                     _crash("mid_batch")
     return published
 
