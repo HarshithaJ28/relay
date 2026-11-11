@@ -306,6 +306,15 @@ def test_twelfth_failure_becomes_dead(connect, factory):
     assert (row["status"], row["attempt_count"], row["last_error_class"]) == ("dead", 12, "max_attempts")
 
 
+def test_eleventh_failure_still_retries(connect, factory):
+    d = factory.delivery(attempt_count=10)
+    seq, dtok = dispatch(connect, factory, d)
+    ltok = tok()
+    assert len(claim(connect, d, seq, dtok, ltok)) == 1
+    assert record_status(connect, d, ltok, "retry", 500, "http_5xx") == "scheduled"
+    assert factory.row(d)["attempt_count"] == 11
+
+
 def test_invalid_outcome_is_rejected(connect, factory):
     d, ltok = claimed(connect, factory)
     with pytest.raises(psycopg.errors.InvalidParameterValue):
