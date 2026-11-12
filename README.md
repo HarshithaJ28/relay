@@ -1,5 +1,8 @@
 # Relay
 
+[![CI](https://github.com/HarshithaJ28/relay/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/HarshithaJ28/relay/actions/workflows/ci.yml)
+[![Image](https://github.com/HarshithaJ28/relay/actions/workflows/image.yml/badge.svg?branch=main)](https://github.com/HarshithaJ28/relay/actions/workflows/image.yml)
+
 Multi-tenant webhook delivery platform. Design: see the Relay Technical Specification (v1.2.2).
 
 ## Status: Milestone 1 (delivery core) and Phase 2 (worker logic)
@@ -26,6 +29,17 @@ Or run them against services that are already up, for example the Compose stack:
 
 If Docker or a service is unavailable the tests fail; they never skip.
 
+### CI/CD
+
+- `ci.yml` (every push to main and every pull request): ruff lint and format check, the full test suite on
+  Python 3.12 and 3.13 against real PostgreSQL 16 and RabbitMQ started by testcontainers, and `pip-audit` on
+  the pinned dependencies.
+- `image.yml`: builds `services/data-plane/Dockerfile` and smoke-tests it on pull requests; on main and on
+  `v*.*.*` tags it pushes a linux/amd64 + linux/arm64 image to `ghcr.io/harshithaj28/relay-data-plane` with an
+  SBOM and a build-provenance attestation.
+- Dependabot opens weekly grouped updates for GitHub Actions (pinned to commit SHAs), pip packages and the
+  base image.
+
 ### What the tests demonstrate (real PostgreSQL 16, real RabbitMQ 3.13 in Docker, synthetic data)
 
 - Wrong, stale or duplicated dispatch tokens, lease tokens and dispatch sequences change nothing.
@@ -46,7 +60,9 @@ If Docker or a service is unavailable the tests fail; they never skip.
 - No performance, throughput or latency numbers exist. None have been measured.
 - RabbitMQ ran as a single node. Nothing here supports a high-availability claim.
 - The harness and `docker-compose.yml` were run on Linux (Docker 29) only, not yet on macOS or Windows.
-- The kind/k3s, Helm, Terraform and CI pieces do not exist yet.
+- There is no deployment step: CI publishes an image but nothing deploys it. kind/k3s, Helm and Terraform do
+  not exist yet.
+- The image's only entry point is the one-shot outbox publisher; it has not been run against a deployed stack.
 - Not built yet: the real HTTP sender (so no request has been sent to a real endpoint), SSRF protection,
   secret encryption/decryption (AES-256-GCM), the long-running worker/scheduler/reaper processes, endpoint
   capacity and circuit breaker, ingestion API with idempotency, retention job, transformations, control
