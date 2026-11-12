@@ -1,0 +1,4 @@
+*
+!services/data-plane/requirements.txt
+!services/data-plane/relay_dataplane/
+**/__pycache__
