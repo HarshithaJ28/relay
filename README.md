@@ -15,7 +15,7 @@ Built (`db/migrations`, `services/data-plane/relay_dataplane`):
 Run the tests (Python 3.12+ and a running Docker daemon; the harness starts throwaway
 `postgres:16` and `rabbitmq:3.13` containers with testcontainers and removes them afterwards):
 
-    pip install "psycopg[binary]" pytest hypothesis aio-pika testcontainers
+    pip install -r requirements-dev.txt
     python3 -m pytest tests
 
 Or run them against services that are already up, for example the Compose stack:
