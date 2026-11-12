@@ -6,3 +6,21 @@ requires-python = ">=3.12"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["services/data-plane"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "RUF"]
+
+[tool.ruff.lint.flake8-bugbear]
+# frozen dataclass, safe as a default argument
+extend-immutable-calls = ["relay_dataplane.worker.WorkerConfig"]
+
+[tool.ruff.lint.per-file-ignores]
+# race tests define thread bodies inside a loop and join them before the next iteration
+"tests/db/test_guarded_functions.py" = ["B023"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["relay_dataplane"]

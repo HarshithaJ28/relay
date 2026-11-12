@@ -1,5 +1,6 @@
 """Milestone 1 gate: stale, duplicated or unauthorized operations cannot change
 delivery state. Every test connects as the real role under test."""
+
 import hashlib
 import os
 import threading
@@ -22,23 +23,28 @@ def dispatch(connect, factory, delivery_id):
         n = c.execute("SELECT delivery.dispatch_batch(%s, 10)", (row["tenant_id"],)).fetchone()[0]
     assert n >= 1
     with connect("postgres") as su:
-        seq, raw = su.execute("SELECT dispatch_seq, dispatch_token FROM delivery.outbox "
-                              "WHERE delivery_id = %s ORDER BY dispatch_seq DESC LIMIT 1",
-                              (delivery_id,)).fetchone()
+        seq, raw = su.execute(
+            "SELECT dispatch_seq, dispatch_token FROM delivery.outbox "
+            "WHERE delivery_id = %s ORDER BY dispatch_seq DESC LIMIT 1",
+            (delivery_id,),
+        ).fetchone()
     return seq, bytes(raw)
 
 
 def claim(connect, delivery_id, seq, dtok, ltok):
     with connect("relay_worker") as c:
-        return c.execute("SELECT * FROM delivery.claim_delivery(%s,%s,%s,%s,%s::interval)",
-                         (delivery_id, seq, dtok, ltok, LEASE)).fetchall()
+        return c.execute(
+            "SELECT * FROM delivery.claim_delivery(%s,%s,%s,%s,%s::interval)", (delivery_id, seq, dtok, ltok, LEASE)
+        ).fetchall()
 
 
 def record_status(connect, delivery_id, ltok, outcome="success", code=200, err=None, retry="10 seconds"):
     """The resulting status, or None when the call was rejected."""
     with connect("relay_worker") as c:
-        return c.execute("SELECT delivery.record_attempt(%s,%s,%s,%s,%s,%s::interval)",
-                         (delivery_id, ltok, outcome, code, err, retry)).fetchone()[0]
+        return c.execute(
+            "SELECT delivery.record_attempt(%s,%s,%s,%s,%s,%s::interval)",
+            (delivery_id, ltok, outcome, code, err, retry),
+        ).fetchone()[0]
 
 
 def record(connect, *args, **kwargs):
@@ -47,16 +53,21 @@ def record(connect, *args, **kwargs):
 
 def attempts(factory, delivery_id):
     with factory._su() as c:
-        return c.execute("SELECT attempt_no, counted, outcome FROM delivery.delivery_attempts "
-                         "WHERE delivery_id = %s ORDER BY id", (delivery_id,)).fetchall()
+        return c.execute(
+            "SELECT attempt_no, counted, outcome FROM delivery.delivery_attempts WHERE delivery_id = %s ORDER BY id",
+            (delivery_id,),
+        ).fetchall()
 
 
 # ------------------------------------------------------------ roles and grants
 
+
 def test_no_role_is_superuser_or_bypasses_rls(connect):
     with connect() as c:
-        rows = c.execute("SELECT rolname FROM pg_roles WHERE rolname LIKE 'relay\\_%' "
-                         "AND (rolsuper OR rolbypassrls OR rolcreaterole OR rolcreatedb)").fetchall()
+        rows = c.execute(
+            "SELECT rolname FROM pg_roles WHERE rolname LIKE 'relay\\_%' "
+            "AND (rolsuper OR rolbypassrls OR rolcreaterole OR rolcreatedb)"
+        ).fetchall()
     assert rows == []
 
 
@@ -64,7 +75,8 @@ def test_public_has_no_execute_on_any_function(connect):
     with connect() as c:
         rows = c.execute(
             "SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace "
-            "WHERE n.nspname = 'delivery' AND has_function_privilege('public', p.oid, 'EXECUTE')").fetchall()
+            "WHERE n.nspname = 'delivery' AND has_function_privilege('public', p.oid, 'EXECUTE')"
+        ).fetchall()
     assert rows == []
 
 
@@ -72,7 +84,8 @@ def test_functions_are_hardened(connect):
     with connect() as c:
         rows = c.execute(
             "SELECT p.proname, p.prosecdef, pg_get_userbyid(p.proowner), p.proconfig "
-            "FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'delivery'").fetchall()
+            "FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'delivery'"
+        ).fetchall()
     assert len(rows) == 4
     for name, secdef, owner, cfg in rows:
         assert secdef, name
@@ -80,8 +93,17 @@ def test_functions_are_hardened(connect):
         assert cfg and any(x.startswith("search_path=pg_catalog") for x in cfg), name
 
 
-@pytest.mark.parametrize("table", ["delivery.deliveries", "delivery.delivery_attempts", "delivery.events",
-                                   "delivery.outbox", "control.endpoints", "control.tenants"])
+@pytest.mark.parametrize(
+    "table",
+    [
+        "delivery.deliveries",
+        "delivery.delivery_attempts",
+        "delivery.events",
+        "delivery.outbox",
+        "control.endpoints",
+        "control.tenants",
+    ],
+)
 def test_worker_has_no_table_privileges(connect, table):
     with connect("relay_worker") as c, pytest.raises(psycopg.errors.InsufficientPrivilege):
         c.execute(f"SELECT 1 FROM {table} LIMIT 1")
@@ -115,6 +137,7 @@ def test_publisher_cannot_change_delivery_identity_columns(connect, factory):
 
 
 # ------------------------------------------------------------ dispatch
+
 
 def test_dispatch_queues_due_deliveries_and_writes_outbox_atomically(connect, factory):
     d = factory.delivery()
@@ -153,7 +176,8 @@ def test_scheduler_skips_a_tenant_another_replica_holds(connect, factory):
 
 def test_concurrent_schedulers_do_not_double_dispatch(connect, factory):
     tenant = factory.tenant()
-    ids = [factory.delivery(tenant=tenant) for _ in range(20)]
+    for _ in range(20):
+        factory.delivery(tenant=tenant)
     results = []
 
     def run():
@@ -171,6 +195,7 @@ def test_concurrent_schedulers_do_not_double_dispatch(connect, factory):
 
 # ------------------------------------------------------------ claim
 
+
 def test_claim_succeeds_with_correct_token_and_returns_payload(connect, factory):
     d = factory.delivery()
     seq, dtok = dispatch(connect, factory, d)
@@ -184,12 +209,12 @@ def test_claim_rejects_wrong_token_wrong_seq_and_wrong_status(connect, factory):
     d = factory.delivery()
     seq, dtok = dispatch(connect, factory, d)
     before = factory.row(d)
-    assert claim(connect, d, seq, tok(), tok()) == []          # wrong token
-    assert claim(connect, d, seq + 1, dtok, tok()) == []       # wrong dispatch_seq
+    assert claim(connect, d, seq, tok(), tok()) == []  # wrong token
+    assert claim(connect, d, seq + 1, dtok, tok()) == []  # wrong dispatch_seq
     assert claim(connect, uuid.uuid4(), seq, dtok, tok()) == []  # unknown delivery
-    assert factory.row(d) == before                              # nothing changed
+    assert factory.row(d) == before  # nothing changed
     sched = factory.delivery()
-    assert claim(connect, sched, 0, tok(), tok()) == []        # not queued
+    assert claim(connect, sched, 0, tok(), tok()) == []  # not queued
 
 
 def test_duplicate_message_cannot_claim_twice(connect, factory):
@@ -198,7 +223,7 @@ def test_duplicate_message_cannot_claim_twice(connect, factory):
     first = tok()
     assert len(claim(connect, d, seq, dtok, first)) == 1
     mid = factory.row(d)
-    assert claim(connect, d, seq, dtok, tok()) == []            # duplicate publish
+    assert claim(connect, d, seq, dtok, tok()) == []  # duplicate publish
     after = factory.row(d)
     assert after["lease_token_hash"] == mid["lease_token_hash"]  # first lease intact
     assert after["lease_until"] == mid["lease_until"]
@@ -233,6 +258,7 @@ def test_claim_rejects_bad_lease_and_short_tokens(connect, factory):
 
 # ------------------------------------------------------------ record_attempt
 
+
 def claimed(connect, factory):
     d = factory.delivery()
     seq, dtok = dispatch(connect, factory, d)
@@ -244,13 +270,13 @@ def claimed(connect, factory):
 def test_record_reports_the_resulting_status(connect, factory):
     d, ltok = claimed(connect, factory)
     assert record_status(connect, d, ltok, "retry", 500, "http_5xx") == "scheduled"
-    with factory._su() as su:                                        # skip the backoff wait
+    with factory._su() as su:  # skip the backoff wait
         su.execute("UPDATE delivery.deliveries SET next_attempt_at = now() WHERE id = %s", (d,))
     seq, dtok = dispatch(connect, factory, d)
     l2 = tok()
     assert len(claim(connect, d, seq, dtok, l2)) == 1
     assert record_status(connect, d, l2, "success") == "succeeded"
-    assert record_status(connect, d, l2, "success") is None          # rejected: nothing to report
+    assert record_status(connect, d, l2, "success") is None  # rejected: nothing to report
 
 
 def test_twelfth_failure_reports_dead(connect, factory):
@@ -271,7 +297,7 @@ def test_record_success_finishes_delivery(connect, factory):
 
 
 def test_record_with_wrong_lease_token_changes_nothing(connect, factory):
-    d, ltok = claimed(connect, factory)
+    d, _ltok = claimed(connect, factory)
     before = factory.row(d)
     assert record(connect, d, tok()) is False
     assert factory.row(d) == before
@@ -281,7 +307,7 @@ def test_record_with_wrong_lease_token_changes_nothing(connect, factory):
 def test_record_twice_second_is_rejected(connect, factory):
     d, ltok = claimed(connect, factory)
     assert record(connect, d, ltok) is True
-    assert record(connect, d, ltok, outcome="dead") is False   # replayed result cannot flip a terminal state
+    assert record(connect, d, ltok, outcome="dead") is False  # replayed result cannot flip a terminal state
     assert factory.row(d)["status"] == "succeeded"
     assert len(attempts(factory, d)) == 1
 
@@ -290,9 +316,11 @@ def test_retry_schedules_with_capped_delay_and_clears_lease(connect, factory):
     d, ltok = claimed(connect, factory)
     assert record(connect, d, ltok, "retry", 503, "http_5xx", "1000 hours") is True
     with factory._su() as c:
-        row = c.execute("SELECT status, attempt_count, lease_token_hash, "
-                        "next_attempt_at - now() <= interval '6 hours 1 minute' FROM delivery.deliveries WHERE id=%s",
-                        (d,)).fetchone()
+        row = c.execute(
+            "SELECT status, attempt_count, lease_token_hash, "
+            "next_attempt_at - now() <= interval '6 hours 1 minute' FROM delivery.deliveries WHERE id=%s",
+            (d,),
+        ).fetchone()
     assert row == ("scheduled", 1, None, True)
 
 
@@ -323,6 +351,7 @@ def test_invalid_outcome_is_rejected(connect, factory):
 
 
 # ------------------------------------------------------------ reaper and fencing
+
 
 def expire_lease(factory, d):
     with factory._su() as c:
@@ -374,7 +403,7 @@ def test_reaper_and_record_race_has_one_winner(connect, factory):
         [t.start() for t in ts]
         [t.join() for t in ts]
         row = factory.row(d)
-        assert row["attempt_count"] == 1                         # exactly one counted attempt
+        assert row["attempt_count"] == 1  # exactly one counted attempt
         assert len(attempts(factory, d)) == 1
         # Exactly one side wins: reaper reclaimed it, or the worker's result landed first.
         assert (out["reap"], out["rec"]) in [(1, False), (0, True)]
@@ -383,13 +412,17 @@ def test_reaper_and_record_race_has_one_winner(connect, factory):
 
 # ------------------------------------------------------------ database-level invariants
 
-@pytest.mark.parametrize("sql", [
-    "UPDATE delivery.deliveries SET status='queued', dispatch_token_hash=NULL",
-    "UPDATE delivery.deliveries SET status='in_flight', lease_token_hash=NULL",
-    "UPDATE delivery.deliveries SET status='succeeded', lease_token_hash='\\x01', lease_until=now()",
-    "UPDATE delivery.deliveries SET status='bogus'",
-    "UPDATE delivery.deliveries SET attempt_count=13",
-])
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "UPDATE delivery.deliveries SET status='queued', dispatch_token_hash=NULL",
+        "UPDATE delivery.deliveries SET status='in_flight', lease_token_hash=NULL",
+        "UPDATE delivery.deliveries SET status='succeeded', lease_token_hash='\\x01', lease_until=now()",
+        "UPDATE delivery.deliveries SET status='bogus'",
+        "UPDATE delivery.deliveries SET attempt_count=13",
+    ],
+)
 def test_database_refuses_impossible_states(connect, factory, sql):
     factory.delivery()
     with connect("postgres") as c, pytest.raises(psycopg.errors.CheckViolation):
@@ -401,9 +434,9 @@ def test_outbox_token_cleared_only_with_published_at(connect, factory):
     dispatch(connect, factory, d)
     with connect("relay_publisher") as c:
         with pytest.raises(psycopg.errors.CheckViolation):
-            c.execute("UPDATE delivery.outbox SET dispatch_token = NULL")          # cleared but not published
+            c.execute("UPDATE delivery.outbox SET dispatch_token = NULL")  # cleared but not published
         with pytest.raises(psycopg.errors.CheckViolation):
-            c.execute("UPDATE delivery.outbox SET published_at = now()")           # published but token kept
+            c.execute("UPDATE delivery.outbox SET published_at = now()")  # published but token kept
         c.execute("UPDATE delivery.outbox SET published_at = now(), dispatch_token = NULL")
 
 
@@ -411,5 +444,8 @@ def test_counted_attempt_numbers_are_unique(connect, factory):
     d, ltok = claimed(connect, factory)
     record(connect, d, ltok, "retry")
     with connect("postgres") as c, pytest.raises(psycopg.errors.UniqueViolation):
-        c.execute("INSERT INTO delivery.delivery_attempts (delivery_id, attempt_no, counted, outcome) "
-                  "VALUES (%s, 1, true, 'retry')", (d,))
+        c.execute(
+            "INSERT INTO delivery.delivery_attempts (delivery_id, attempt_no, counted, outcome) "
+            "VALUES (%s, 1, true, 'retry')",
+            (d,),
+        )

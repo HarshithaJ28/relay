@@ -8,6 +8,7 @@ progress and the reaper reclaims it, this worker's result is rejected, but the
 external request may already have reached the receiver. Receivers de-duplicate on
 the `webhook-id` header, which stays the same for every attempt of one delivery.
 """
+
 import json
 import os
 import random
@@ -25,8 +26,8 @@ from .outcome import Sender, SendResult, classify
 
 @dataclass(frozen=True)
 class WorkerConfig:
-    request_timeout: float = 10.0        # seconds for one HTTP request
-    lease_margin: float = 30.0           # lease = timeout + margin, so a live send never outlives its lease
+    request_timeout: float = 10.0  # seconds for one HTTP request
+    lease_margin: float = 30.0  # lease = timeout + margin, so a live send never outlives its lease
 
     @property
     def lease_for(self) -> timedelta:
@@ -35,7 +36,7 @@ class WorkerConfig:
 
 @dataclass(frozen=True)
 class Handled:
-    result: str                          # "duplicate" | "succeeded" | "retry" | "dead" | "fenced"
+    result: str  # "duplicate" | "succeeded" | "retry" | "dead" | "fenced"
     delivery_id: str
     attempt_no: int | None = None
     error_class: str | None = None
@@ -59,22 +60,25 @@ async def handle_message(
     msg = parse_message(body)
     lease_token = os.urandom(16)
 
-    cur = await conn.execute(CLAIM_SQL, (msg.delivery_id, msg.dispatch_seq, msg.dispatch_token,
-                                         lease_token, config.lease_for))
+    cur = await conn.execute(
+        CLAIM_SQL, (msg.delivery_id, msg.dispatch_seq, msg.dispatch_token, lease_token, config.lease_for)
+    )
     rows = await cur.fetchall()
     if not rows:
-        return Handled("duplicate", msg.delivery_id)          # stale or duplicate: nothing to do, caller acks
+        return Handled("duplicate", msg.delivery_id)  # stale or duplicate: nothing to do, caller acks
     _, attempt_no, message_id, event_id, url, secret_blob, payload = rows[0]
 
     payload_bytes = canonical_body(payload)
-    headers = signing.signed_headers(decrypt_secrets(bytes(secret_blob)), str(message_id),
-                                     int(clock()), payload_bytes)
-    headers |= {"content-type": "application/json",
-                "relay-event-id": str(event_id), "relay-delivery-id": msg.delivery_id}
+    headers = signing.signed_headers(decrypt_secrets(bytes(secret_blob)), str(message_id), int(clock()), payload_bytes)
+    headers |= {
+        "content-type": "application/json",
+        "relay-event-id": str(event_id),
+        "relay-delivery-id": msg.delivery_id,
+    }
 
     try:
         sent = await sender.send(url, headers, payload_bytes, config.request_timeout)
-    except Exception:                                          # a sender bug must not strand the delivery
+    except Exception:  # a sender bug must not strand the delivery
         sent = SendResult(status=None, error_class="internal_error")
 
     verdict = classify(sent)
@@ -82,14 +86,15 @@ async def handle_message(
     if verdict.outcome == "retry":
         delay = backoff.next_delay(attempt_no, rng)
         if sent.retry_after:
-            delay = max(delay, sent.retry_after)               # honour the receiver's Retry-After
+            delay = max(delay, sent.retry_after)  # honour the receiver's Retry-After
         retry_after = timedelta(seconds=delay)
 
-    cur = await conn.execute("SELECT delivery.record_attempt(%s, %s, %s, %s, %s, %s)",
-                             (msg.delivery_id, lease_token, verdict.outcome, verdict.status_code,
-                              verdict.error_class, retry_after))
+    cur = await conn.execute(
+        "SELECT delivery.record_attempt(%s, %s, %s, %s, %s, %s)",
+        (msg.delivery_id, lease_token, verdict.outcome, verdict.status_code, verdict.error_class, retry_after),
+    )
     new_status = (await cur.fetchone())[0]
-    if new_status is None:                                     # lease lost: the database rejected our result
+    if new_status is None:  # lease lost: the database rejected our result
         return Handled("fenced", msg.delivery_id, attempt_no, verdict.error_class)
     # The database decides the final state (for example, a 12th failure becomes dead).
     result = {"succeeded": "succeeded", "scheduled": "retry", "dead": "dead"}[new_status]

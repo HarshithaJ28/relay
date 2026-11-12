@@ -8,12 +8,20 @@ def test_2xx_is_success(status):
     assert classify(SendResult(status)).outcome == "success"
 
 
-@pytest.mark.parametrize("status,error", [
-    (301, "redirect_not_followed"), (302, "redirect_not_followed"),
-    (400, "http_4xx"), (404, "http_4xx"), (410, "http_4xx"),
-    (429, "rate_limited"),
-    (500, "http_5xx"), (503, "http_5xx"), (599, "http_5xx"),
-])
+@pytest.mark.parametrize(
+    "status,error",
+    [
+        (301, "redirect_not_followed"),
+        (302, "redirect_not_followed"),
+        (400, "http_4xx"),
+        (404, "http_4xx"),
+        (410, "http_4xx"),
+        (429, "rate_limited"),
+        (500, "http_5xx"),
+        (503, "http_5xx"),
+        (599, "http_5xx"),
+    ],
+)
 def test_every_other_status_is_retried_with_a_class(status, error):
     c = classify(SendResult(status))
     assert (c.outcome, c.error_class, c.status_code) == ("retry", error, status)

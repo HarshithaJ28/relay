@@ -6,6 +6,7 @@ key            = base64-decoded part of the secret after the "whsec_" prefix
 
 During secret rotation several signatures may be sent, space-separated.
 """
+
 import base64
 import hashlib
 import hmac
@@ -19,7 +20,7 @@ TOLERANCE_SECONDS = 300
 def _key(secret: str) -> bytes:
     if not secret.startswith(SECRET_PREFIX):
         raise ValueError("secret must start with 'whsec_'")
-    return base64.b64decode(secret[len(SECRET_PREFIX):], validate=True)
+    return base64.b64decode(secret[len(SECRET_PREFIX) :], validate=True)
 
 
 def sign(secret: str, message_id: str, timestamp: int, body: bytes) -> str:
@@ -39,8 +40,9 @@ def signed_headers(secrets: Sequence[str], message_id: str, timestamp: int, body
     }
 
 
-def verify(secret: str, headers: Mapping[str, str], body: bytes,
-           now: float | None = None, tolerance: int = TOLERANCE_SECONDS) -> bool:
+def verify(
+    secret: str, headers: Mapping[str, str], body: bytes, now: float | None = None, tolerance: int = TOLERANCE_SECONDS
+) -> bool:
     """Receiver-side check (used by tests and the chaos receiver)."""
     try:
         message_id = headers["webhook-id"]

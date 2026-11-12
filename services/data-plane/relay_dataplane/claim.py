@@ -1,4 +1,5 @@
 """Worker-side use of the guarded database functions."""
+
 import json
 import os
 from dataclasses import dataclass
@@ -28,6 +29,5 @@ def claim_from_message(conn: psycopg.Connection, body: bytes, lease_for: str = "
     """
     m = parse_message(body)
     lease_token = os.urandom(16)
-    rows = conn.execute(CLAIM_SQL, (m.delivery_id, m.dispatch_seq, m.dispatch_token,
-                                    lease_token, lease_for)).fetchall()
+    rows = conn.execute(CLAIM_SQL, (m.delivery_id, m.dispatch_seq, m.dispatch_token, lease_token, lease_for)).fetchall()
     return (rows[0], lease_token) if rows else None
