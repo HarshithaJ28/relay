@@ -2,14 +2,14 @@
 # Data-plane image. Build from the repository root:
 #   docker build -f services/data-plane/Dockerfile .
 
-FROM python:3.12-slim AS build
+FROM python:3.15-slim AS build
 ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /build
 COPY services/data-plane/requirements.txt .
 RUN python -m venv /opt/venv \
  && /opt/venv/bin/pip install --require-virtualenv -r requirements.txt
 
-FROM python:3.12-slim
+FROM python:3.15-slim
 LABEL org.opencontainers.image.source="https://github.com/HarshithaJ28/relay" \
       org.opencontainers.image.description="Relay data plane" \
       org.opencontainers.image.licenses="NOASSERTION"
