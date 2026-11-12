@@ -1,4 +1,5 @@
 """Turn the result of one HTTP send into a delivery outcome."""
+
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -6,9 +7,10 @@ from typing import Protocol
 @dataclass(frozen=True)
 class SendResult:
     """What the sender observed. status is None when no HTTP response arrived."""
+
     status: int | None
-    error_class: str | None = None       # e.g. "timeout", "connection_error", "blocked_destination"
-    retry_after: float | None = None     # seconds, parsed from a Retry-After header if present
+    error_class: str | None = None  # e.g. "timeout", "connection_error", "blocked_destination"
+    retry_after: float | None = None  # seconds, parsed from a Retry-After header if present
 
 
 class Sender(Protocol):
@@ -22,7 +24,7 @@ TERMINAL_ERROR_CLASSES = frozenset({"blocked_destination"})
 
 @dataclass(frozen=True)
 class Classified:
-    outcome: str                         # "success" | "retry" | "dead"
+    outcome: str  # "success" | "retry" | "dead"
     error_class: str | None
     status_code: int | None
 

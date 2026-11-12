@@ -1,5 +1,6 @@
-from hypothesis import given, strategies as st
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 from relay_dataplane import backoff
 
@@ -7,7 +8,7 @@ from relay_dataplane import backoff
 def test_documented_schedule_and_total_window():
     # The values in the spec, recomputed here rather than trusted.
     assert backoff.schedule_bounds() == [30, 60, 120, 240, 480, 960, 1920, 3840, 7680, 15360, 21600]
-    assert sum(backoff.schedule_bounds()) == 52_290          # 14.5 hours at the worst case
+    assert sum(backoff.schedule_bounds()) == 52_290  # 14.5 hours at the worst case
 
 
 def test_delay_is_capped_at_six_hours():

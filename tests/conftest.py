@@ -19,6 +19,7 @@ Where the services come from (per service, chosen by environment variable):
 
 If a service cannot be started or reached, the tests fail. They never skip.
 """
+
 import asyncio
 import os
 import pathlib
@@ -34,16 +35,26 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 MIGRATIONS = sorted((ROOT / "db" / "migrations").glob("*.sql"))
 PG_IMAGE = "postgres:16"
 RABBITMQ_IMAGE = "rabbitmq:3.13"
-LOGIN_ROLES = ["relay_owner", "relay_tenant", "relay_scheduler", "relay_publisher",
-               "relay_worker", "relay_reaper", "relay_retention"]
-DOCKER_HELP = ("start Docker, or point the tests at running services with RELAY_TEST_PG_DSN "
-               "and RELAY_TEST_AMQP_URL (see tests/conftest.py)")
+LOGIN_ROLES = [
+    "relay_owner",
+    "relay_tenant",
+    "relay_scheduler",
+    "relay_publisher",
+    "relay_worker",
+    "relay_reaper",
+    "relay_retention",
+]
+DOCKER_HELP = (
+    "start Docker, or point the tests at running services with RELAY_TEST_PG_DSN "
+    "and RELAY_TEST_AMQP_URL (see tests/conftest.py)"
+)
 
 
 def _start_container(image: str, port: int, env: dict[str, str]):
     """Start a throwaway container with testcontainers; fail loudly if Docker is not usable."""
     try:
         from testcontainers.core.container import DockerContainer
+
         container = DockerContainer(image).with_exposed_ports(port).with_envs(**env)
         container.start()
     except Exception as e:  # docker not installed, daemon down, image pull failed, ...
@@ -74,13 +85,13 @@ def pg_dsn():
         server = external
     else:
         # trust auth: this server lives only for the test session and listens on a random port
-        container, host, port = _start_container(
-            PG_IMAGE, 5432, {"POSTGRES_HOST_AUTH_METHOD": "trust"})
+        container, host, port = _start_container(PG_IMAGE, 5432, {"POSTGRES_HOST_AUTH_METHOD": "trust"})
         server = f"host={host} port={port}"
 
     # The image restarts the server once after init; only the final server accepts TCP.
-    _wait_until("PostgreSQL", lambda: psycopg.connect(f"{server} dbname=postgres user=postgres",
-                                                      connect_timeout=5).close())
+    _wait_until(
+        "PostgreSQL", lambda: psycopg.connect(f"{server} dbname=postgres user=postgres", connect_timeout=5).close()
+    )
     db = f"relay_test_{uuid.uuid4().hex[:12]}"
     with psycopg.connect(f"{server} dbname=postgres user=postgres", autocommit=True) as c:
         version = c.execute("SHOW server_version_num").fetchone()[0]
@@ -127,8 +138,10 @@ def connect(pg_dsn):
 def clean(pg_dsn):
     """Empty all tables before each test (superuser; tests themselves use real roles)."""
     with psycopg.connect(f"{pg_dsn} user=postgres", autocommit=True) as c:
-        c.execute("TRUNCATE delivery.outbox, delivery.delivery_attempts, delivery.deliveries, "
-                  "delivery.dispatch_locks, delivery.events, control.endpoints, control.tenants CASCADE")
+        c.execute(
+            "TRUNCATE delivery.outbox, delivery.delivery_attempts, delivery.deliveries, "
+            "delivery.dispatch_locks, delivery.events, control.endpoints, control.tenants CASCADE"
+        )
     yield
 
 
@@ -148,25 +161,31 @@ class Factory:
     def delivery(self, tenant=None, status="scheduled", **cols) -> uuid.UUID:
         tenant = tenant or self.tenant()
         with self._su() as c:
-            ep = c.execute("INSERT INTO control.endpoints (tenant_id, url, secret_ciphertext) "
-                           "VALUES (%s, 'https://example.invalid/hook', '\\x00') RETURNING id",
-                           (tenant,)).fetchone()[0]
+            ep = c.execute(
+                "INSERT INTO control.endpoints (tenant_id, url, secret_ciphertext) "
+                "VALUES (%s, 'https://example.invalid/hook', '\\x00') RETURNING id",
+                (tenant,),
+            ).fetchone()[0]
             ev = uuid.uuid4()
-            created = c.execute("INSERT INTO delivery.events (id, tenant_id, payload) "
-                                "VALUES (%s, %s, '{\"k\": 1}') RETURNING created_at", (ev, tenant)).fetchone()[0]
+            created = c.execute(
+                "INSERT INTO delivery.events (id, tenant_id, payload) "
+                "VALUES (%s, %s, '{\"k\": 1}') RETURNING created_at",
+                (ev, tenant),
+            ).fetchone()[0]
             cols = {"status": status, **cols}
             names = ", ".join(cols)
             ph = ", ".join(["%s"] * len(cols))
             return c.execute(
                 f"INSERT INTO delivery.deliveries (tenant_id, endpoint_id, event_id, event_created_at, {names}) "
                 f"VALUES (%s, %s, %s, %s, {ph}) RETURNING id",
-                (tenant, ep, ev, created, *cols.values())).fetchone()[0]
+                (tenant, ep, ev, created, *cols.values()),
+            ).fetchone()[0]
 
     def row(self, delivery_id) -> dict:
         with self._su() as c:
             cur = c.execute("SELECT * FROM delivery.deliveries WHERE id = %s", (delivery_id,))
             names = [d.name for d in cur.description]
-            return dict(zip(names, cur.fetchone()))
+            return dict(zip(names, cur.fetchone(), strict=True))
 
 
 @pytest.fixture
@@ -175,6 +194,7 @@ def factory(pg_dsn):
 
 
 # ---------------- RabbitMQ (crash-recovery tests only) ----------------
+
 
 async def _amqp_ping(url: str):
     conn = await aio_pika.connect(url, timeout=5)

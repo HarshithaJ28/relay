@@ -9,6 +9,7 @@ dispatch_seq. Duplicates are possible by design; claim_delivery filters them.
 Crash points exist so tests can kill the real process at each window:
   RELAY_CRASH_AT=before_publish | after_publish_before_mark | mid_batch
 """
+
 import asyncio
 import json
 import os
@@ -30,8 +31,9 @@ async def declare(channel: aio_pika.abc.AbstractChannel, name: str = QUEUE):
 
 
 def encode(delivery_id, dispatch_seq: int, token: bytes) -> bytes:
-    return json.dumps({"delivery_id": str(delivery_id), "dispatch_seq": dispatch_seq,
-                       "dispatch_token": token.hex()}).encode()
+    return json.dumps(
+        {"delivery_id": str(delivery_id), "dispatch_seq": dispatch_seq, "dispatch_token": token.hex()}
+    ).encode()
 
 
 async def publish_pending(dsn: str, amqp_url: str, queue: str = QUEUE, batch: int = 100) -> int:
@@ -46,7 +48,8 @@ async def publish_pending(dsn: str, amqp_url: str, queue: str = QUEUE, batch: in
             while published < batch:
                 row = db.execute(
                     "SELECT id, delivery_id, dispatch_seq, dispatch_token FROM delivery.outbox "
-                    "WHERE published_at IS NULL ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED").fetchone()
+                    "WHERE published_at IS NULL ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED"
+                ).fetchone()
                 if row is None:
                     db.commit()
                     break
@@ -55,13 +58,18 @@ async def publish_pending(dsn: str, amqp_url: str, queue: str = QUEUE, batch: in
                 # With confirms on, this returns only after the broker has accepted
                 # (and, for a quorum queue, replicated and persisted) the message.
                 await channel.default_exchange.publish(
-                    aio_pika.Message(encode(delivery_id, seq, bytes(token)),
-                                     delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
-                                     message_id=f"{delivery_id}:{seq}"),
-                    routing_key=queue, mandatory=True)
+                    aio_pika.Message(
+                        encode(delivery_id, seq, bytes(token)),
+                        delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
+                        message_id=f"{delivery_id}:{seq}",
+                    ),
+                    routing_key=queue,
+                    mandatory=True,
+                )
                 _crash("after_publish_before_mark")
-                db.execute("UPDATE delivery.outbox SET published_at = now(), dispatch_token = NULL WHERE id = %s",
-                           (oid,))
+                db.execute(
+                    "UPDATE delivery.outbox SET published_at = now(), dispatch_token = NULL WHERE id = %s", (oid,)
+                )
                 db.commit()
                 published += 1
                 if published == 2:
