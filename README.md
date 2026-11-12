@@ -18,8 +18,9 @@ Run the tests (Python 3.12+ and a running Docker daemon; the harness starts thro
     pip install "psycopg[binary]" pytest hypothesis aio-pika testcontainers
     python3 -m pytest tests
 
-Or run them against services that are already up (PostgreSQL with trust authentication):
+Or run them against services that are already up, for example the Compose stack:
 
+    docker compose up -d --wait
     RELAY_TEST_PG_DSN="host=127.0.0.1 port=5432" \
     RELAY_TEST_AMQP_URL="amqp://guest:guest@127.0.0.1:5672/" python3 -m pytest tests
 
@@ -44,8 +45,7 @@ If Docker or a service is unavailable the tests fail; they never skip.
 
 - No performance, throughput or latency numbers exist. None have been measured.
 - RabbitMQ ran as a single node. Nothing here supports a high-availability claim.
-- The harness was run on Linux (Docker 29) only, not yet on macOS or Windows.
-- `docker-compose.yml` has not been run.
+- The harness and `docker-compose.yml` were run on Linux (Docker 29) only, not yet on macOS or Windows.
 - The kind/k3s, Helm, Terraform and CI pieces do not exist yet.
 - Not built yet: the real HTTP sender (so no request has been sent to a real endpoint), SSRF protection,
   secret encryption/decryption (AES-256-GCM), the long-running worker/scheduler/reaper processes, endpoint
