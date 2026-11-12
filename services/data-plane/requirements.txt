@@ -1,0 +1,3 @@
+# Runtime dependencies of the data plane. Pinned; Dependabot proposes updates.
+aio-pika==10.2.3
+psycopg[binary]==3.3.9

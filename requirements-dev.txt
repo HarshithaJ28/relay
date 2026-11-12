@@ -1,0 +1,7 @@
+# Test and lint tooling. Pinned; Dependabot proposes updates.
+-r services/data-plane/requirements.txt
+hypothesis==6.170.15
+pip-audit==2.10.1
+pytest==9.2.0
+ruff==0.17.5
+testcontainers==4.15.0
