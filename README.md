@@ -12,12 +12,20 @@ Built (`db/migrations`, `services/data-plane/relay_dataplane`):
 - Worker core: claim, Standard Webhooks signing, send through an injected `Sender`, response
   classification, full-jitter backoff honouring `Retry-After`, fenced result recording.
 
-Run the tests (needs PostgreSQL 16 server binaries and RabbitMQ; the harness starts both):
+Run the tests (Python 3.12+ and a running Docker daemon; the harness starts throwaway
+`postgres:16` and `rabbitmq:3.13` containers with testcontainers and removes them afterwards):
 
-    pip install "psycopg[binary]" pytest hypothesis aio-pika
+    pip install "psycopg[binary]" pytest hypothesis aio-pika testcontainers
     python3 -m pytest tests
 
-### What the tests demonstrate (real PostgreSQL 16, real RabbitMQ 3.12, synthetic data)
+Or run them against services that are already up (PostgreSQL with trust authentication):
+
+    RELAY_TEST_PG_DSN="host=127.0.0.1 port=5432" \
+    RELAY_TEST_AMQP_URL="amqp://guest:guest@127.0.0.1:5672/" python3 -m pytest tests
+
+If Docker or a service is unavailable the tests fail; they never skip.
+
+### What the tests demonstrate (real PostgreSQL 16, real RabbitMQ 3.13 in Docker, synthetic data)
 
 - Wrong, stale or duplicated dispatch tokens, lease tokens and dispatch sequences change nothing.
 - Ten concurrent claims of one dispatch produce exactly one winner.
@@ -36,7 +44,9 @@ Run the tests (needs PostgreSQL 16 server binaries and RabbitMQ; the harness sta
 
 - No performance, throughput or latency numbers exist. None have been measured.
 - RabbitMQ ran as a single node. Nothing here supports a high-availability claim.
-- `docker-compose.yml` has not been run. The kind/k3s, Helm, Terraform and CI pieces do not exist yet.
+- The harness was run on Linux (Docker 29) only, not yet on macOS or Windows.
+- `docker-compose.yml` has not been run.
+- The kind/k3s, Helm, Terraform and CI pieces do not exist yet.
 - Not built yet: the real HTTP sender (so no request has been sent to a real endpoint), SSRF protection,
   secret encryption/decryption (AES-256-GCM), the long-running worker/scheduler/reaper processes, endpoint
   capacity and circuit breaker, ingestion API with idempotency, retention job, transformations, control
