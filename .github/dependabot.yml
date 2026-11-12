@@ -24,5 +24,9 @@ updates:
     directory: /services/data-plane
     schedule:
       interval: weekly
+    ignore:
+      # the data plane targets Python 3.12; moving to a new minor is a deliberate change
+      - dependency-name: python
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
     commit-message:
       prefix: build
