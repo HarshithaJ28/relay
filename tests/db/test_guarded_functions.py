@@ -1,4 +1,4 @@
-"""Milestone 1 gate: stale, duplicated or unauthorized operations cannot change
+"""Guarded functions: stale, duplicated or unauthorized operations cannot change
 delivery state. Every test connects as the real role under test."""
 
 import hashlib
@@ -86,7 +86,16 @@ def test_functions_are_hardened(connect):
             "SELECT p.proname, p.prosecdef, pg_get_userbyid(p.proowner), p.proconfig "
             "FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'delivery'"
         ).fetchall()
-    assert len(rows) == 4
+    assert sorted(r[0] for r in rows) == [
+        "check_lease",
+        "claim_delivery",
+        "defer_delivery",
+        "dispatch_batch",
+        "due_tenants",
+        "reclaim_expired",
+        "record_attempt",
+        "requeue_stale",
+    ]
     for name, secdef, owner, cfg in rows:
         assert secdef, name
         assert owner == "relay_claims", name
@@ -120,6 +129,13 @@ def test_each_role_can_only_execute_its_own_functions(connect, factory):
         ("relay_reaper", "SELECT delivery.dispatch_batch(%s, 1)", (tenant,)),
         ("relay_publisher", "SELECT delivery.reclaim_expired(1)", ()),
         ("relay_tenant", "SELECT delivery.reclaim_expired(1)", ()),
+        ("relay_worker", "SELECT * FROM delivery.due_tenants(1)", ()),
+        ("relay_publisher", "SELECT * FROM delivery.due_tenants(1)", ()),
+        ("relay_worker", "SELECT delivery.requeue_stale('1 minute', 1)", ()),
+        ("relay_scheduler", "SELECT delivery.requeue_stale('1 minute', 1)", ()),
+        ("relay_reaper", "SELECT delivery.check_lease(%s,%s,'1 second')", (d, tok())),
+        ("relay_scheduler", "SELECT delivery.check_lease(%s,%s,'1 second')", (d, tok())),
+        ("relay_tenant", "SELECT delivery.check_lease(%s,%s,'1 second')", (d, tok())),
     ]
     for role, sql, args in forbidden:
         with connect(role) as c, pytest.raises(psycopg.errors.InsufficientPrivilege):

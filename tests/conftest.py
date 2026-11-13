@@ -30,11 +30,17 @@ import aio_pika
 import psycopg
 import pytest
 from psycopg.conninfo import conninfo_to_dict
+from psycopg.types.json import Jsonb
+
+from relay_dataplane.endpoint_secrets import Keyring, new_entry
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 MIGRATIONS = sorted((ROOT / "db" / "migrations").glob("*.sql"))
 PG_IMAGE = "postgres:16"
 RABBITMQ_IMAGE = "rabbitmq:3.13"
+# Synthetic master key and signing secret for tests only.
+TEST_KEYRING = Keyring({"test-k1": bytes(range(32))}, "test-k1")
+TEST_SECRET = "whsec_" + "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="  # base64 of 0123456789abcdef x2
 LOGIN_ROLES = [
     "relay_owner",
     "relay_tenant",
@@ -60,6 +66,17 @@ def _start_container(image: str, port: int, env: dict[str, str]):
     except Exception as e:  # docker not installed, daemon down, image pull failed, ...
         pytest.fail(f"could not start {image} with testcontainers ({type(e).__name__}: {e}); {DOCKER_HELP}")
     return container, container.get_container_host_ip(), int(container.get_exposed_port(port))
+
+
+def _stop_container(container) -> None:
+    """Stop and remove a test container. A 409 means Docker is already removing it, which is fine."""
+    import docker.errors
+
+    try:
+        container.stop()
+    except docker.errors.APIError as e:
+        if e.status_code != 409:
+            raise
 
 
 def _wait_until(what: str, attempt, timeout: float = 120):
@@ -111,7 +128,7 @@ def pg_dsn():
         pytest.fail(f"cannot log in as relay_worker without a password; the test server needs trust auth: {e}")
     yield dsn
     if container is not None:
-        container.stop()
+        _stop_container(container)
     else:
         with psycopg.connect(f"{server} dbname=postgres user=postgres", autocommit=True) as c:
             c.execute(f"DROP DATABASE IF EXISTS {db} WITH (FORCE)")
@@ -158,18 +175,21 @@ class Factory:
         with self._su() as c:
             return c.execute("INSERT INTO control.tenants (name) VALUES ('t') RETURNING id").fetchone()[0]
 
-    def delivery(self, tenant=None, status="scheduled", **cols) -> uuid.UUID:
+    def delivery(self, tenant=None, status="scheduled", signing_secrets=None, **cols) -> uuid.UUID:
+        """signing_secrets: a callable endpoint_id -> list of entries; default one TEST_SECRET entry."""
         tenant = tenant or self.tenant()
+        ep = uuid.uuid4()
+        entries = (signing_secrets or (lambda e: [new_entry(TEST_KEYRING, str(e), "s1", TEST_SECRET)]))(ep)
         with self._su() as c:
-            ep = c.execute(
-                "INSERT INTO control.endpoints (tenant_id, url, secret_ciphertext) "
-                "VALUES (%s, 'https://example.invalid/hook', '\\x00') RETURNING id",
-                (tenant,),
-            ).fetchone()[0]
+            c.execute(
+                "INSERT INTO control.endpoints (id, tenant_id, url, signing_secrets) "
+                "VALUES (%s, %s, 'https://example.invalid/hook', %s)",
+                (ep, tenant, Jsonb(entries)),
+            )
             ev = uuid.uuid4()
             created = c.execute(
-                "INSERT INTO delivery.events (id, tenant_id, payload) "
-                "VALUES (%s, %s, '{\"k\": 1}') RETURNING created_at",
+                "INSERT INTO delivery.events (id, tenant_id, payload, event_type, payload_sha256) "
+                "VALUES (%s, %s, '{\"k\": 1}', 'test.event', sha256('{\"k\":1}')) RETURNING created_at",
                 (ev, tenant),
             ).fetchone()[0]
             cols = {"status": status, **cols}
@@ -213,4 +233,4 @@ def rabbit_url():
     _wait_until("RabbitMQ", lambda: asyncio.run(_amqp_ping(url)))
     yield url
     if container is not None:
-        container.stop()
+        _stop_container(container)

@@ -1,4 +1,4 @@
-"""Milestone 1 gate (AC-1): the publisher process is really killed at each crash
+"""AC-1: the publisher process is really killed at each crash
 window, against real PostgreSQL and RabbitMQ. No delivery may be lost, a
 republish must carry the same token, and a duplicate message may claim at most once."""
 

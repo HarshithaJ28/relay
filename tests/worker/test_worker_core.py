@@ -1,18 +1,21 @@
-"""Worker core against real PostgreSQL, with a scripted sender standing in for HTTP
-(the real, SSRF-guarded HTTP sender is a later phase)."""
+"""Worker core against real PostgreSQL, with a scripted sender standing in for HTTP.
+The real HTTP sender is tested with the worker in tests/sender/test_worker_http.py."""
 
 import asyncio
 import base64
 import json
+import uuid
+from datetime import UTC, datetime, timedelta
 
 import psycopg
 import pytest
 
 from relay_dataplane import signing
+from relay_dataplane.endpoint_secrets import Keyring, new_entry
 from relay_dataplane.outcome import SendResult
 from relay_dataplane.worker import WorkerConfig, handle_message
-
-SECRET = "whsec_" + base64.b64encode(b"0123456789abcdef0123456789abcdef").decode()
+from tests.conftest import TEST_KEYRING
+from tests.conftest import TEST_SECRET as SECRET
 
 
 class ScriptedSender:
@@ -33,10 +36,6 @@ class ScriptedSender:
         return r
 
 
-def decrypt(_blob: bytes) -> list[str]:
-    return [SECRET]
-
-
 def queue_message(connect, factory, delivery_id) -> bytes:
     row = factory.row(delivery_id)
     with connect("relay_scheduler") as c:
@@ -55,7 +54,7 @@ def queue_message(connect, factory, delivery_id) -> bytes:
 def run(pg_dsn, body, sender, **kw):
     async def go():
         async with await psycopg.AsyncConnection.connect(f"{pg_dsn} user=relay_worker", autocommit=True) as conn:
-            return await handle_message(conn, body, sender, decrypt, **kw)
+            return await handle_message(conn, body, sender, kw.pop("keyring", TEST_KEYRING), **kw)
 
     return asyncio.run(go())
 
@@ -157,3 +156,74 @@ def test_lease_lost_during_send_is_fenced_and_the_documented_duplicate_window_is
 def test_lease_is_longer_than_the_request_timeout():
     cfg = WorkerConfig(request_timeout=10, lease_margin=30)
     assert cfg.lease_for.total_seconds() > cfg.request_timeout
+
+
+# ---------------------------------------------------------------- signing secrets (encrypted at rest)
+
+NEW_SECRET = "whsec_" + base64.b64encode(b"a-brand-new-secret-for-rotation!").decode()
+
+
+def test_during_rotation_the_request_verifies_with_either_secret(connect, factory, pg_dsn):
+    d = factory.delivery(
+        signing_secrets=lambda ep: [
+            new_entry(TEST_KEYRING, str(ep), "s1", SECRET, expires_at=datetime.now(UTC) + timedelta(days=1)),
+            new_entry(TEST_KEYRING, str(ep), "s2", NEW_SECRET),
+        ]
+    )
+    sender = ScriptedSender(SendResult(200))
+    run(pg_dsn, queue_message(connect, factory, d), sender)
+    ((_, headers, sent_body, _),) = sender.calls
+    assert len(headers["webhook-signature"].split()) == 2
+    assert signing.verify(SECRET, headers, sent_body)  # receiver not yet switched
+    assert signing.verify(NEW_SECRET, headers, sent_body)  # receiver already switched
+
+
+def test_an_expired_secret_is_no_longer_used(connect, factory, pg_dsn):
+    d = factory.delivery(
+        signing_secrets=lambda ep: [
+            new_entry(TEST_KEYRING, str(ep), "s1", SECRET, expires_at=datetime.now(UTC) - timedelta(seconds=1)),
+            new_entry(TEST_KEYRING, str(ep), "s2", NEW_SECRET),
+        ]
+    )
+    sender = ScriptedSender(SendResult(200))
+    run(pg_dsn, queue_message(connect, factory, d), sender)
+    ((_, headers, sent_body, _),) = sender.calls
+    assert len(headers["webhook-signature"].split()) == 1
+    assert signing.verify(NEW_SECRET, headers, sent_body)
+    assert not signing.verify(SECRET, headers, sent_body)
+
+
+@pytest.mark.parametrize(
+    "keyring",
+    [
+        pytest.param(Keyring({"other": bytes(32)}, "other"), id="master key missing"),
+        pytest.param(Keyring({"test-k1": bytes(32)}, "test-k1"), id="wrong master key"),
+    ],
+)
+def test_undecryptable_secret_sends_nothing_and_is_retried(connect, factory, pg_dsn, keyring):
+    d = factory.delivery()
+    sender = ScriptedSender()
+    h = run(pg_dsn, queue_message(connect, factory, d), sender, keyring=keyring)
+    assert sender.calls == []  # an unsigned or wrongly signed request is never sent
+    assert (h.result, h.error_class) == ("retry", "secret_unavailable")
+    row = factory.row(d)
+    assert (row["status"], row["attempt_count"], row["last_error_class"]) == ("scheduled", 1, "secret_unavailable")
+
+
+def test_ciphertext_moved_to_another_endpoint_is_not_used(connect, factory, pg_dsn):
+    foreign = uuid.uuid4()  # encrypted for a different endpoint, then copied here
+    d = factory.delivery(signing_secrets=lambda _ep: [new_entry(TEST_KEYRING, str(foreign), "s1", SECRET)])
+    sender = ScriptedSender()
+    h = run(pg_dsn, queue_message(connect, factory, d), sender)
+    assert sender.calls == [] and h.error_class == "secret_unavailable"
+
+
+def test_a_lease_shorter_than_the_request_timeout_sends_nothing(connect, factory, pg_dsn):
+    """Spec section 5: if the lease cannot outlive the request, give the delivery back unused."""
+    d = factory.delivery()
+    sender = ScriptedSender()
+    h = run(pg_dsn, queue_message(connect, factory, d), sender, config=WorkerConfig(request_timeout=5, lease_margin=-4))
+    assert sender.calls == []
+    assert (h.result, h.error_class) == ("deferred", "lease_too_short")
+    row = factory.row(d)
+    assert (row["status"], row["attempt_count"], row["last_error_class"]) == ("scheduled", 0, "lease_too_short")

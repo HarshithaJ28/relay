@@ -14,7 +14,7 @@ CAP_SECONDS = 6 * 60 * 60
 MAX_ATTEMPTS = 12
 
 
-def upper_bound(n: int, base: int = BASE_SECONDS, cap: int = CAP_SECONDS) -> int:
+def upper_bound(n: int, base: float = BASE_SECONDS, cap: float = CAP_SECONDS) -> float:
     """Largest possible delay after failed attempt n (1-based)."""
     if n < 1:
         raise ValueError("attempt number starts at 1")
@@ -22,12 +22,14 @@ def upper_bound(n: int, base: int = BASE_SECONDS, cap: int = CAP_SECONDS) -> int
 
 
 def next_delay(
-    n: int, rng: Callable[[], float] = random.random, base: int = BASE_SECONDS, cap: int = CAP_SECONDS
+    n: int, rng: Callable[[], float] = random.random, base: float = BASE_SECONDS, cap: float = CAP_SECONDS
 ) -> float:
     """A random delay in seconds, uniform over [0, upper_bound(n)]."""
     return rng() * upper_bound(n, base, cap)
 
 
-def schedule_bounds(max_attempts: int = MAX_ATTEMPTS, base: int = BASE_SECONDS, cap: int = CAP_SECONDS) -> list[int]:
+def schedule_bounds(
+    max_attempts: int = MAX_ATTEMPTS, base: float = BASE_SECONDS, cap: float = CAP_SECONDS
+) -> list[float]:
     """Upper bounds for every retry delay a delivery can experience."""
     return [upper_bound(n, base, cap) for n in range(1, max_attempts)]

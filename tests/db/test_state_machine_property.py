@@ -3,12 +3,17 @@ run against the real database and compared with an independent model of the
 delivery state machine. Hypothesis shrinks any failing sequence to a minimal one."""
 
 import os
+import uuid
 
 import psycopg
 import pytest
 from hypothesis import HealthCheck, settings
 from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, initialize, invariant, rule
+from psycopg.types.json import Jsonb
+
+from relay_dataplane.endpoint_secrets import new_entry
+from tests.conftest import TEST_KEYRING, TEST_SECRET
 
 MAX_ATTEMPTS = 12
 TERMINAL = {"succeeded", "dead"}
@@ -31,11 +36,12 @@ class DeliveryMachine(RuleBasedStateMachine):
             "delivery.dispatch_locks, delivery.events, control.endpoints, control.tenants CASCADE"
         )
         self.tenant = self.su.execute("INSERT INTO control.tenants (name) VALUES ('t') RETURNING id").fetchone()[0]
-        self.endpoint = self.su.execute(
-            "INSERT INTO control.endpoints (tenant_id, url, secret_ciphertext) "
-            "VALUES (%s, 'https://example.invalid', '\\x00') RETURNING id",
-            (self.tenant,),
-        ).fetchone()[0]
+        self.endpoint = uuid.uuid4()
+        self.su.execute(
+            "INSERT INTO control.endpoints (id, tenant_id, url, signing_secrets) "
+            "VALUES (%s, %s, 'https://example.invalid', %s)",
+            (self.endpoint, self.tenant, Jsonb([new_entry(TEST_KEYRING, str(self.endpoint), "s1", TEST_SECRET)])),
+        )
         self.sched = self.connect("relay_scheduler")
         self.worker = self.connect("relay_worker")
         self.reaper = self.connect("relay_reaper")
@@ -52,7 +58,8 @@ class DeliveryMachine(RuleBasedStateMachine):
     def new_delivery(self, start):
         ev = self.su.execute("SELECT gen_random_uuid()").fetchone()[0]
         created = self.su.execute(
-            "INSERT INTO delivery.events (id, tenant_id, payload) VALUES (%s, %s, '{}') RETURNING created_at",
+            "INSERT INTO delivery.events (id, tenant_id, payload, event_type, payload_sha256) "
+            "VALUES (%s, %s, '{}', 'test.event', sha256('{}')) RETURNING created_at",
             (ev, self.tenant),
         ).fetchone()[0]
         d = self.su.execute(

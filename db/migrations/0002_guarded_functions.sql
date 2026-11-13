@@ -49,7 +49,7 @@ BEGIN
   RETURN n;
 END $$;
 
--- Worker side, step 1: claim. Zero rows = stale or duplicate message.
+-- Worker side, first call: claim. Zero rows = stale or duplicate message.
 CREATE FUNCTION delivery.claim_delivery(
   p_delivery_id uuid, p_dispatch_seq int, p_dispatch_token bytea,
   p_lease_token bytea, p_lease_for interval)
@@ -83,7 +83,7 @@ BEGIN
   JOIN delivery.events ev ON ev.id = c.event_id AND ev.created_at = c.event_created_at;
 END $$;
 
--- Worker side, step 2: record the result. Fenced by the lease token.
+-- Worker side, second call: record the result. Fenced by the lease token.
 -- Returns the delivery's new status, or NULL (changing nothing) for a wrong
 -- token, an already-finished delivery, or one the reaper has reclaimed.
 CREATE FUNCTION delivery.record_attempt(

@@ -64,8 +64,11 @@ jobs:
       - name: Smoke test
         run: |
           docker run --rm relay-data-plane:smoke python -c \
-            "import relay_dataplane.publisher, relay_dataplane.worker, relay_dataplane.signing"
+            "import relay_dataplane.processes, relay_dataplane.ingest, relay_dataplane.retention, relay_dataplane.transform"
           test "$(docker run --rm relay-data-plane:smoke id -u)" = "10001"
+          # a missing configuration must fail fast with exit code 2, not start half-configured
+          set +e; docker run --rm relay-data-plane:smoke; code=$?; set -e
+          test "$code" = "2"
 
       - name: Log in to GHCR
         if: github.event_name != 'pull_request'

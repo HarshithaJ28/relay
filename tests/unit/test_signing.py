@@ -65,3 +65,25 @@ def test_malformed_secret_is_rejected(bad):
         signing.sign(bad, "m", 1, BODY)
     with pytest.raises(ValueError):
         signing.signed_headers([], "m", 1, BODY)
+
+
+# Official test vector from the Standard Webhooks repository
+# (github.com/standard-webhooks/standard-webhooks, libraries/go/webhook_test.go, TestWebhookSign).
+OFFICIAL_SECRET = "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw"
+OFFICIAL_MSG_ID = "msg_p5jXN8AQM9LWM0D4loKWxJek"
+OFFICIAL_TS = 1614265330
+OFFICIAL_BODY = b'{"test": 2432232314}'
+OFFICIAL_SIGNATURE = "v1,g0hM9SsE+OTPJTGt/tmIKtSyZlE3uFJELVlNIOLJ1OE="
+
+
+def test_official_standard_webhooks_vector():
+    assert signing.sign(OFFICIAL_SECRET, OFFICIAL_MSG_ID, OFFICIAL_TS, OFFICIAL_BODY) == OFFICIAL_SIGNATURE
+
+
+def test_official_vector_verifies_and_a_near_miss_does_not():
+    headers = {"webhook-id": OFFICIAL_MSG_ID, "webhook-timestamp": str(OFFICIAL_TS)}
+    ok = {**headers, "webhook-signature": OFFICIAL_SIGNATURE}
+    assert signing.verify(OFFICIAL_SECRET, ok, OFFICIAL_BODY, now=OFFICIAL_TS)
+    # one character changed (the invalid-signature case in the official Python library tests)
+    near = {**headers, "webhook-signature": "v1,g0hM9SsE+OTPJTGt/tmIKtSyZlE3uFJELVlNIOLJ1OA="}
+    assert not signing.verify(OFFICIAL_SECRET, near, OFFICIAL_BODY, now=OFFICIAL_TS)

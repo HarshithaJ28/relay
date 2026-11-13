@@ -21,6 +21,10 @@ COPY --from=build /opt/venv /opt/venv
 COPY services/data-plane/relay_dataplane /app/relay_dataplane
 WORKDIR /app
 USER 10001
-# The outbox publisher is the only runnable entry point so far: it drains the
-# outbox once and exits. Configured by RELAY_DSN, RELAY_AMQP and RELAY_QUEUE.
-CMD ["python", "-m", "relay_dataplane.publisher"]
+# One image, six processes: worker (default), scheduler, reaper, publisher, retention,
+# and ingest (the HTTP API on RELAY_INGEST_PORT, default 8080).
+# Choose with the argument, e.g. `docker run IMAGE python -m relay_dataplane scheduler`.
+# SIGTERM shuts each one down gracefully. Settings: see relay_dataplane/settings.py.
+EXPOSE 8080
+STOPSIGNAL SIGTERM
+CMD ["python", "-m", "relay_dataplane", "worker"]

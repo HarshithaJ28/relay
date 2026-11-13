@@ -35,7 +35,7 @@ CREATE TABLE control.endpoints (
 );
 
 -- Partitioned by month in production (partition job comes later); a default
--- partition keeps this milestone self-contained. No FKs point into it.
+-- partition is used until partition management exists. No FKs point into it.
 CREATE TABLE delivery.events (
   id         uuid NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
