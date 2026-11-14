@@ -11,7 +11,8 @@ metadata:
     {{- include "relay.selector" (dict "root" . "component" "worker") | nindent 4 }}
   annotations:
     helm.sh/hook: test
-    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    # Kept after it finishes so `helm test --logs` can read the result; replaced on the next run.
+    helm.sh/hook-delete-policy: before-hook-creation
 spec:
   {{- include "relay.podSecurity" . | nindent 2 }}
   restartPolicy: Never
