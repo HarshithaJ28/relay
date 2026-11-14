@@ -117,8 +117,14 @@ jobs:
         run: |
           curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="$K3S_VERSION" sh -s - --write-kubeconfig-mode 644
           mkdir -p ~/.kube && cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
-          for i in $(seq 60); do kubectl get nodes | grep -q " Ready" && break; sleep 2; done
-          kubectl wait --for=condition=Ready pods --all -n kube-system --timeout=180s
+          # k3s creates the node, then CoreDNS, then Traefik (through a Helm install job), a
+          # few seconds apart: wait for each to exist before waiting for it to be ready.
+          for i in $(seq 90); do kubectl get nodes 2>/dev/null | grep -q " Ready" && break; sleep 2; done
+          kubectl wait --for=condition=Ready node --all --timeout=60s
+          for d in coredns traefik; do
+            for i in $(seq 90); do kubectl -n kube-system get deployment "$d" >/dev/null 2>&1 && break; sleep 2; done
+            kubectl -n kube-system rollout status deployment "$d" --timeout=180s
+          done
 
       - name: Build the three images and load them into k3s
         run: |
