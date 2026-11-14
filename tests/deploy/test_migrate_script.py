@@ -2,7 +2,9 @@
 
 import os
 import shutil
+import socket
 import subprocess
+import time
 import uuid
 from pathlib import Path
 
@@ -85,3 +87,32 @@ def test_refuses_to_run_without_a_database_url():
     r = subprocess.run(["sh", str(SCRIPT)], env={"PATH": os.environ["PATH"]}, capture_output=True, text=True)
     assert r.returncode != 0
     assert "DATABASE_URL is required" in r.stderr
+
+
+def test_gives_up_on_a_database_that_never_answers():
+    """A connection that is accepted and then never answered (or dropped, as a network
+    policy does) must time out and fail with the reason, not hang the deploy."""
+    silent = socket.socket()
+    silent.bind(("127.0.0.1", 0))
+    silent.listen(16)
+    port = silent.getsockname()[1]
+    try:
+        started = time.monotonic()
+        r = subprocess.run(
+            ["sh", str(SCRIPT)],
+            env={
+                **os.environ,
+                "DATABASE_URL": f"postgresql://postgres@127.0.0.1:{port}/relay",
+                "RELAY_MIGRATE_WAIT_SECONDS": "3",
+            },
+            capture_output=True,
+            text=True,
+            timeout=40,
+        )
+        elapsed = time.monotonic() - started
+    finally:
+        silent.close()
+    assert r.returncode != 0
+    assert "database not reachable after 3s" in r.stderr
+    assert "timeout" in r.stderr.lower()
+    assert elapsed < 30

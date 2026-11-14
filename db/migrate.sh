@@ -10,12 +10,17 @@ set -eu
 : "${DATABASE_URL:?DATABASE_URL is required (a superuser connection URL)}"
 DIR="${RELAY_MIGRATIONS_DIR:-/db/migrations}"
 export PGOPTIONS="${PGOPTIONS:-} -c client_min_messages=warning"
+# A dropped connection (for example by a network policy) must fail, not hang.
+export PGCONNECT_TIMEOUT="${PGCONNECT_TIMEOUT:-5}"
+WAIT="${RELAY_MIGRATE_WAIT_SECONDS:-120}"
 q() { psql "$DATABASE_URL" -X -q -v ON_ERROR_STOP=1 "$@"; }
 
-i=0
-until q -c "SELECT 1" >/dev/null 2>&1; do
-  i=$((i + 1))
-  [ "$i" -ge 60 ] && { echo "database not reachable" >&2; exit 1; }
+start=$(date +%s)
+until err=$(q -c "SELECT 1" 2>&1 >/dev/null); do
+  if [ $(($(date +%s) - start)) -ge "$WAIT" ]; then
+    echo "database not reachable after ${WAIT}s: $err" >&2
+    exit 1
+  fi
   sleep 2
 done
 

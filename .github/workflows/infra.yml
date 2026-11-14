@@ -183,5 +183,6 @@ jobs:
         if: failure()
         run: |
           kubectl -n relay get pods,jobs,pvc,networkpolicies -o wide || true
+          kubectl -n relay get events --sort-by=.lastTimestamp | tail -60 || true
           kubectl -n relay describe pods || true
           for p in $(kubectl -n relay get pods -o name); do echo "== $p"; kubectl -n relay logs "$p" --all-containers --tail=50 || true; done
