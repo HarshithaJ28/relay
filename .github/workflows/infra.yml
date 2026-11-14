@@ -195,5 +195,11 @@ jobs:
         run: |
           kubectl -n relay get pods,jobs,pvc,networkpolicies -o wide || true
           kubectl -n relay get events --sort-by=.lastTimestamp | tail -60 || true
+          # How the node enforces the policies: k3s's policy controller (kube-router) chains,
+          # the address sets it builds from ipBlock rules, and the chains that run before them.
+          echo "== filter table"; sudo iptables-save -t filter | grep -E '^(:|-A (INPUT|FORWARD|OUTPUT|KUBE-ROUTER|KUBE-NWPLCY|KUBE-POD-FW|FLANNEL))' | head -300 || true
+          echo "== ipsets"; sudo ipset list -t || true
+          for set in $(sudo ipset list -n | grep -i -E 'KUBE-DST|KUBE-SRC' | head -20); do echo "-- $set"; sudo ipset list "$set" | sed -n '/Members/,$p' | head -40; done || true
+          echo "== routes"; ip route || true
           kubectl -n relay describe pods || true
           for p in $(kubectl -n relay get pods -o name); do echo "== $p"; kubectl -n relay logs "$p" --all-containers --tail=50 || true; done
