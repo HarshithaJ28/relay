@@ -272,7 +272,7 @@ Control-plane tests (Node 22; the same real PostgreSQL with these migrations, an
 - Nothing has been deployed. The Helm charts, Terraform stacks and deploy job exist; the charts were checked with
   `helm lint` and `kubeconform`, and Terraform with `validate` and `tflint`. `infra.yml`'s k3s job installs
   both charts on a real cluster, where the migrations, every rollout and the API through Traefik work; its egress
-  smoke test fails (see the SSRF item below). No Terraform stack has been applied. The datastores run as single
+  smoke test has not passed yet (see the SSRF item below). No Terraform stack has been applied. The datastores run as single
   pods on one node.
 - The processes have run only as local subprocesses with shrunk timings (1 s request timeout, sub-second
   retries), not in a cluster and not with the production defaults. Outages were 5 s long; longer ones and
@@ -289,10 +289,11 @@ Control-plane tests (Node 22; the same real PostgreSQL with these migrations, an
 - The real transformation runner (Node, JSONata) does not exist; AC-2 was tested against an HTTP runner double
   that follows the documented protocol. There is no runner circuit breaker yet.
 - The HTTP sender has only sent to a local test receiver, never to a real public endpoint, and only with
-  scripted DNS in tests. The second SSRF layer is not working yet: on k3s in CI, a pod with the worker's labels is
-  blocked from other pods but can still reach the Kubernetes API, the node's ports and 169.254.169.254, so the
-  NetworkPolicy's excluded ranges are not enforced there. The egress smoke test catches this and fails; the
-  cause is being investigated. Until it passes, the sender's own checks are the only SSRF layer.
+  scripted DNS in tests. The NetworkPolicy (the second SSRF layer) has not yet passed on a cluster: in the first
+  k3s runs the egress smoke test checked before the policy controller had programmed the new pod's rules. The
+  test now waits up to 60 s for the policy to hold. Even when it passes, k3s's policy controller applies a new
+  pod's rules a few seconds after the pod starts, so a just-started worker is unprotected by this layer for
+  that window; the sender's own checks still apply.
 - Master keys are read from the environment or a file; no KMS integration. Re-encrypting stored secrets after a
   master-key change is a library function (`reencrypt`) with no job or command that runs it yet.
 - The breaker's defaults (60 s window, 10 results, 50 % failures, 30 s cool-down up to 10 min) and the tenant

@@ -123,3 +123,5 @@ egressSmokeTest:
   enabled: true
   # Also require that a public HTTPS host is reachable (off where the cluster has no internet).
   publicHost: ""
+  # How long to wait for the policy controller to apply a new pod's rules.
+  waitSeconds: 60

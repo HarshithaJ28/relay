@@ -25,6 +25,8 @@ spec:
           valueFrom: { fieldRef: { fieldPath: status.hostIP } }
         - name: PUBLIC_HOST
           value: {{ .Values.egressSmokeTest.publicHost | quote }}
+        - name: WAIT_SECONDS
+          value: {{ .Values.egressSmokeTest.waitSeconds | quote }}
         - name: TARGETS
           value: >-
             kubernetes.default.svc:443
@@ -41,23 +43,40 @@ spec:
         - python
         - -c
         - |
-          import os, socket, sys
-          failed = []
-          for target in os.environ["TARGETS"].split():
-              host, port = target.rsplit(":", 1)
-              try:
-                  socket.create_connection((host, int(port)), timeout=3).close()
-                  failed.append(target)
-                  print(f"REACHABLE (must not be): {target}")
-              except OSError as e:
-                  print(f"blocked: {target} ({type(e).__name__})")
+          import os, socket, sys, time
+          # k3s's policy controller programs a new pod's rules a few seconds after it starts.
+          # Retry until the policy holds or the deadline passes; only a steady state counts.
+          targets = os.environ["TARGETS"].split()
           public = os.environ.get("PUBLIC_HOST")
-          if public:
-              try:
-                  socket.create_connection((public, 443), timeout=5).close()
-                  print(f"reachable as required: {public}:443")
-              except OSError as e:
-                  failed.append(f"{public}:443 unreachable")
-                  print(f"UNREACHABLE (must be reachable): {public}:443 ({e})")
-          sys.exit(1 if failed else 0)
+          deadline = time.monotonic() + float(os.environ.get("WAIT_SECONDS", "60"))
+
+          def check():
+              lines, bad = [], []
+              for target in targets:
+                  host, port = target.rsplit(":", 1)
+                  try:
+                      socket.create_connection((host, int(port)), timeout=3).close()
+                      bad.append(target)
+                      lines.append(f"REACHABLE (must not be): {target}")
+                  except OSError as e:
+                      lines.append(f"blocked: {target} ({type(e).__name__})")
+              if public:
+                  try:
+                      socket.create_connection((public, 443), timeout=5).close()
+                      lines.append(f"reachable as required: {public}:443")
+                  except OSError as e:
+                      bad.append(f"{public}:443 unreachable")
+                      lines.append(f"UNREACHABLE (must be reachable): {public}:443 ({e})")
+              return lines, bad
+
+          attempt = 0
+          while True:
+              attempt += 1
+              lines, bad = check()
+              if not bad or time.monotonic() >= deadline:
+                  break
+              time.sleep(3)
+          print(f"after {attempt} attempt(s):")
+          print("\n".join(lines))
+          sys.exit(1 if bad else 0)
 {{- end }}

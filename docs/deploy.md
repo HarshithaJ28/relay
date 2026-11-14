@@ -82,7 +82,9 @@ Every pod in both releases is denied in both directions unless a policy allows i
 
 `helm test` runs a pod with the worker's labels that tries to reach the Kubernetes API, the
 control plane, ingestion, the node's kubelet, k3s API and SSH ports, the metadata address and
-each extra blocked address. It fails if any connection succeeds. In CI the same test runs on
+each extra blocked address. It fails if any connection still succeeds after `egressSmokeTest.waitSeconds`
+(default 60): k3s's policy controller programs a new pod's rules a few seconds after the pod starts, so the
+first attempts may get through. The same delay applies to every new pod, including workers. In CI the same test runs on
 real k3s, and is also run with the policies switched off to show that it then fails.
 
 ## 5. Continuous deployment
