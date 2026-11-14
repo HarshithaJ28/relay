@@ -5,6 +5,12 @@
 
 Multi-tenant webhook delivery platform. Design: see the Relay Technical Specification (v1.2.2).
 
+Two services share one PostgreSQL database (migrations in `db/migrations`):
+
+- `services/data-plane` (Python 3.12): ingestion API, scheduler, publisher, workers, reaper and retention job.
+- `services/control-plane` (TypeScript, Fastify, Zod, Drizzle): accounts, endpoints, subscriptions, API keys,
+  deliveries, replay, usage and billing, under `/api/v1`.
+
 ## Status
 
 Built (`db/migrations`, `services/data-plane/relay_dataplane`):
@@ -52,6 +58,58 @@ Built (`db/migrations`, `services/data-plane/relay_dataplane`):
   `transform_unavailable`, deferred with no attempt used, until the deferral run passes the maximum deferral
   age (`RELAY_MAX_DEFERRAL_AGE`, default 6 h), after which each deferral counts. The signature covers the
   transformed body.
+- Bounded dispatching (migration 0008): the scheduler dispatches only what an endpoint can accept
+  (`concurrency_limit`, counting its queued and in-flight deliveries) and caps each tenant's active deliveries
+  (`dispatch_cap`), so a slow endpoint's backlog waits in PostgreSQL instead of filling RabbitMQ or the workers.
+  Oldest work goes first, and each tenant gets at most one batch per pass, so one busy tenant cannot starve
+  the others. Counting happens under the tenant's dispatch lock, so two schedulers never spend the same slot.
+- Circuit breaker per endpoint (`breaker.py`, migration 0009): a rolling failure window in Valkey (one Lua
+  script per decision) opens the breaker when the failure rate reaches the threshold with enough volume; the
+  endpoint's due deliveries move past the reopen time without using attempts; after the cool-down exactly one
+  probe is dispatched, and its result closes the breaker or reopens it with a doubled cool-down (capped).
+  Timeouts, connection, DNS and TLS errors, 5xx and 429 count as failures; other 4xx do not. PostgreSQL holds a
+  mirror for the scheduler, and a successful probe closes it even if Valkey was lost; without Valkey nothing
+  opens. Enabled by `RELAY_VALKEY_URL`; window, volume, threshold and cool-downs are settings.
+- Per-tenant ingestion rate limit (`ratelimit.py`): a token bucket in Valkey (`ingest_rate_per_sec`,
+  `ingest_burst` per tenant) using Valkey's clock, so API replicas share one bucket. Over the limit: 429 with
+  `Retry-After`. Checked after authentication, so unauthenticated traffic cannot spend a tenant's tokens. If
+  Valkey is unreachable, requests are allowed and a warning is logged.
+- Replay (migration 0010, `delivery.replay_delivery`): a finished delivery is replayed as a new delivery; the
+  webhook-id is new by default for a succeeded delivery and reused for a dead one, a replay carries
+  `relay-replay` and `relay-replay-of`, and an expired payload cannot be replayed (the expiry is returned).
+- Dead-letter queue: the dispatch queue has a delivery limit and dead-letters into `relay.dlq`. A malformed
+  message goes there at once; a message whose handling keeps failing is retried until the limit.
+- Live updates: after the database records an outcome, the worker publishes it (and breaker openings) on the
+  tenant's Valkey channel; the control plane relays the channel as server-sent events.
+- Maintenance in the retention job: monthly `delivery.events` partitions three months ahead, dropped only when
+  older than the longest retention plus 7 days and no delivery refers to them; outbox rows deleted once their
+  dispatch is over; a daily orphan report; daily usage totals recomputed from the source rows.
+  `delivery_attempts` is deliberately not partitioned: its unique index on counted attempts would have to
+  include the partition key, which would remove the guarantee that an attempt is never counted twice.
+- API-key cache in ingestion (30 s by default, `RELAY_API_KEY_CACHE_SECONDS`); a revoked key keeps working for
+  up to that long.
+- Observability (`observability.py`): Prometheus metrics, `/healthz` and `/readyz` on every process
+  (`RELAY_METRICS_PORT`, default 9100; ingestion serves them on its own port), JSON logs with any `*_token`
+  field or `key=value` redacted (tracebacks included), and OpenTelemetry traces exported when
+  `OTEL_EXPORTER_OTLP_ENDPOINT` is set. Wire-level library loggers never go below INFO, because AMQP frames
+  carry message bodies. Grafana dashboard and Prometheus alert rules: `deploy/grafana`.
+- Control plane (`services/control-plane`, migration 0011):
+  - accounts: registration creates a tenant and its owner; argon2id passwords; short-lived JWT access tokens;
+    rotating refresh tokens in an httpOnly, SameSite=Strict cookie, where reusing an old token revokes the
+    whole session family; roles owner, admin and viewer;
+  - endpoints with save-time SSRF checks (URL and current DNS answers; the same corpus as the data plane), the
+    plan's endpoint limit, encrypted signing secrets (the data plane's format; each language decrypts the
+    other's), rotation with an overlap window, test events and health;
+  - event types, subscriptions, API keys (shown once, stored as SHA-256) and users;
+  - deliveries with filters, cursor pagination and attempts; payloads hidden past retention; single and bulk
+    replay with counts before anything runs;
+  - plans, usage and Stripe billing (test mode): checkout sessions and signed, idempotent webhooks that move
+    a tenant between plans and copy the plan's limits onto it;
+  - `GET /api/v1/stream` (server-sent events from Valkey), `/healthz`, `/readyz`, `/metrics`, OpenAPI at
+    `/api/v1/openapi.json`, RFC 9457 errors.
+  It connects as its own role, `relay_control`, bound by row-level security like ingestion's `relay_tenant`,
+  which stays narrower (no endpoint URLs). Functions that run before a tenant is known (register, login lookup,
+  session rotation, Stripe events) are owned by the plain role `relay_auth`.
 - Long-running processes (`python -m relay_dataplane worker|scheduler|reaper|publisher|ingest|retention`, one
   image):
   - worker: consumes with a prefetch limit, checks by the database clock that the lease outlives the request
@@ -64,7 +122,8 @@ Built (`db/migrations`, `services/data-plane/relay_dataplane`):
   (`relay_dataplane/settings.py`); a configuration error exits with code 2.
 
 Run the tests (Python 3.12+ and a running Docker daemon; the harness starts throwaway
-`postgres:16` and `rabbitmq:3.13` containers with testcontainers and removes them afterwards):
+`postgres:16`, `rabbitmq:3.13` and `valkey/valkey:8.1` containers with testcontainers and removes them
+afterwards):
 
     pip install -r requirements-dev.txt
     python3 -m pytest tests
@@ -73,9 +132,14 @@ Or run them against services that are already up, for example the Compose stack:
 
     docker compose up -d --wait
     RELAY_TEST_PG_DSN="host=127.0.0.1 port=5432" \
-    RELAY_TEST_AMQP_URL="amqp://guest:guest@127.0.0.1:5672/" python3 -m pytest tests
+    RELAY_TEST_AMQP_URL="amqp://guest:guest@127.0.0.1:5672/" \
+    RELAY_TEST_VALKEY_URL="valkey://127.0.0.1:6379/15" python3 -m pytest tests
 
 If Docker or a service is unavailable the tests fail; they never skip.
+
+Control-plane tests (Node 22; the same real PostgreSQL with these migrations, and Valkey):
+
+    cd services/control-plane && npm ci && npm test
 
 ### CI/CD
 
@@ -85,8 +149,10 @@ If Docker or a service is unavailable the tests fail; they never skip.
 - `image.yml`: builds `services/data-plane/Dockerfile` and smoke-tests it on pull requests; on main and on
   `v*.*.*` tags it pushes a linux/amd64 + linux/arm64 image to `ghcr.io/harshithaj28/relay-data-plane` with an
   SBOM and a build-provenance attestation.
-- Dependabot opens weekly grouped updates for GitHub Actions (pinned to commit SHAs), pip packages and the
-  base image.
+- `ci.yml` also runs the control plane's typecheck, Biome lint, tests and `npm audit`, and `image.yml` builds,
+  smoke-tests and publishes `ghcr.io/harshithaj28/relay-control-plane` the same way.
+- Dependabot opens weekly grouped updates for GitHub Actions (pinned to commit SHAs), pip, npm and the base
+  image.
 
 ### What the tests verify (real PostgreSQL 16 and RabbitMQ 3.13 in Docker, synthetic data)
 
@@ -131,12 +197,44 @@ If Docker or a service is unavailable the tests fail; they never skip.
 - AC-2, as the spec states it: a runner that hangs past the RPC timeout produces a deferral, never dead (also
   for refusals, resets, 5xx and malformed answers); `limit_exceeded` produces dead with nothing sent; after the
   runner recovers the same delivery is transformed and delivered.
+- Capacity: an endpoint never has more than its limit active, in-flight work counts, a full endpoint does not
+  hold back its neighbours, the tenant cap holds across endpoints, oldest work goes first, and one busy tenant
+  cannot take a whole pass. A deterministic two-scheduler test shows the tenant lock is what stops a second
+  scheduler from overbooking an endpoint when the ranking changes between count and commit.
+- Circuit breaker: the Valkey state machine (volume, threshold, rolling window, ignored late results, doubled
+  and capped cool-downs, probe), the PostgreSQL mirror (only a lease holder can open it, the backlog moves
+  without attempts, exactly one probe after the cool-down, only a probe success closes it), and end to end: an
+  endpoint down for 4 s with 30 deliveries opens the breaker, receives fewer than 60 requests during the outage
+  instead of hundreds, and every delivery succeeds after the probe closes the breaker.
+- Rate limit: burst, then 429 with `Retry-After`, then refill; separate buckets per tenant; 20 concurrent
+  requests cannot overspend a bucket of 5; unauthenticated requests use no tokens; Valkey down lets traffic through.
+- Replay: default and explicit message-id modes, active deliveries refused, another tenant's delivery not found,
+  an expired payload refused with its expiry, replay headers on the replayed request.
+- Dead-letter queue against real RabbitMQ: a malformed message is dead-lettered on its first delivery, and a
+  poison message after its first delivery plus two redeliveries (limit 2).
+- Outages while the real processes run: the database refusing connections and RabbitMQ stopped, each for 5 s;
+  every process stays up, reconnects and every delivery arrives. This found a real bug: a closed AMQP channel
+  raised an error the publisher did not treat as a broker error, and the process exited.
+- Canary tokens (spec section 3): known token values pushed through every worker path with all libraries at
+  DEBUG and tracing on appear in no log line, trace attribute, error or stored row; the real processes at DEBUG
+  do not log their real dispatch tokens. This found a real leak: the AMQP library logs raw frames, which
+  contain message bodies, at DEBUG.
+- Every process serves metrics, health and readiness, its counters reflect its work, and every log line is JSON;
+  the dashboard and alert rules reference only exported metrics.
+- Control plane (123 tests, real PostgreSQL and Valkey): sessions and token rotation with reuse detection,
+  tampered, expired, foreign-key and foreign-audience tokens refused, roles, the spec's isolation test (another
+  tenant calls every route with this tenant's ids and gets 404), SSRF corpus and DNS checks at save time, plan
+  limits, secret rotation, AC-3 payload hiding, replay and bulk replay, pagination that never skips rows created
+  in the same millisecond, Stripe signatures and idempotency, and the live stream.
 - Mutation checks: removing each token, sequence, status or lease guard, an off-by-one at the retry limit, or
   marking an outbox row before the broker confirms, makes at least one test fail. The same holds for each
   SSRF guard (25 mutants: the address checks, URL checks, redirects, proxies, cookies, body limit and
   the URL-parser cross-check), each secret-encryption guard (26 mutants), and the process rules (ack only after
   recording, no requeue loops, graceful shutdown, every due tenant served, the lease check, the reaper's two jobs),
-  ingestion (13 mutants plus each of the 8 tenant policies) and retention and transformations (20 mutants).
+  ingestion (13 mutants plus each of the 8 tenant policies), retention and transformations (20 mutants),
+  bounded dispatching (7 mutants) and the circuit breaker and rate limit (24 mutants; two survivors showed
+  redundant code, which was removed), and replay, dead-lettering, live updates, maintenance, the key cache and
+  the control plane's guards (about 50 more).
 
 ### Known limitations
 
@@ -146,13 +244,16 @@ If Docker or a service is unavailable the tests fail; they never skip.
 - There is no deployment step: CI publishes an image but nothing deploys it. kind/k3s, Helm and Terraform do
   not exist yet.
 - The processes have run only as local subprocesses with shrunk timings (1 s request timeout, sub-second
-  retries), not in a cluster and not with the production defaults. A database or broker outage while they run
-  has not been tested; the reconnect paths are untested code.
-- No metrics or traces exist yet; the retention metrics are log lines, not exported. Logs are plain text. Only
-  the ingestion API has health endpoints.
-- Ingestion has no per-tenant rate limit (the spec's Valkey token bucket) and no API-key cache; every request
-  authenticates against PostgreSQL. Event types, endpoints and subscriptions have no API yet (the control plane
-  is not built); tests create them directly.
+  retries), not in a cluster and not with the production defaults. Outages were 5 s long; longer ones and
+  network partitions have not been tested.
+- The Grafana dashboard and alert rules are files that have not been imported into Grafana Cloud, and no
+  traces have been sent to a collector. Alert thresholds are starting points.
+- Billing has never called the real Stripe API: checkout uses a stand-in client in tests, and webhooks are
+  checked with Stripe's own signing scheme. Plan limits other than endpoint count, retention, rates and the
+  dispatch cap (for example events per month) are shown in usage but not enforced.
+- There is no login rate limiting or account lockout yet, no email verification, no password reset and no
+  invitation flow (owners create users with a password).
+- Usage totals are recomputed from the source tables instead of the spec's Valkey counters.
 - The real transformation runner (Node, JSONata) does not exist; AC-2 was tested against an HTTP runner double
   that follows the documented protocol. There is no runner circuit breaker yet.
 - If a claimed delivery's event row were missing, `claim_delivery` would still mark it in flight and the reaper
@@ -163,8 +264,10 @@ If Docker or a service is unavailable the tests fail; they never skip.
   layer) do not exist yet.
 - Master keys are read from the environment or a file; no KMS integration. Re-encrypting stored secrets after a
   master-key change is a library function (`reencrypt`) with no job or command that runs it yet.
-- Not built yet: endpoint capacity and circuit breaker, per-tenant fairness, replay API, control plane, console,
-  AI.
+- The breaker's defaults (60 s window, 10 results, 50 % failures, 30 s cool-down up to 10 min) and the tenant
+  limits (10 per endpoint, 100 per tenant, 100 events/s with a burst of 200) are provisional; the spec calls for
+  choosing them from chaos-receiver experiments, which have not been run.
+- Not built yet: the console, the transformation runner and authoring flow, and the AI features.
 - The publisher confirms one message at a time; its throughput is unmeasured.
-- Monthly partition management for `delivery.events` is not implemented (a default partition is used).
-- Partitions are never dropped: retention deletes rows only.
+- Months that already have rows in the default partition stay there; partitions are created ahead of time
+  from then on.

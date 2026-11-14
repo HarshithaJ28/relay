@@ -1,4 +1,8 @@
 *
 !services/data-plane/requirements.txt
 !services/data-plane/relay_dataplane/
+!services/control-plane/package.json
+!services/control-plane/package-lock.json
+!services/control-plane/tsconfig.json
+!services/control-plane/src/
 **/__pycache__

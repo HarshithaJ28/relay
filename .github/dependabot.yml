@@ -30,3 +30,13 @@ updates:
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
     commit-message:
       prefix: build
+
+  - package-ecosystem: npm
+    directory: /services/control-plane
+    schedule:
+      interval: weekly
+    groups:
+      npm:
+        patterns: ["*"]
+    commit-message:
+      prefix: build
