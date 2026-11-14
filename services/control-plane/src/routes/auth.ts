@@ -12,6 +12,8 @@ import {
   refreshHash,
 } from "../auth.js";
 import { withoutTenant, withTenant } from "../db.js";
+import { INVITE_PATTERN, inviteHash } from "../invites.js";
+import { LimiterUnavailable } from "../loginLimit.js";
 import { Problem, unauthorized } from "../problem.js";
 import { ProblemSchema } from "./shared.js";
 
@@ -36,7 +38,7 @@ const Session = z.object({
 
 export async function authRoutes(app: FastifyInstance) {
   const api = app.withTypeProvider<ZodTypeProvider>();
-  const { config, db } = app.deps;
+  const { config, db, loginLimiter } = app.deps;
   const refreshTtl = `${config.refreshTokenDays} days`;
 
   async function startSession(reply: FastifyReply, p: Principal, email: string) {
@@ -72,17 +74,26 @@ export async function authRoutes(app: FastifyInstance) {
     {
       schema: {
         security: [],
-        body: z.object({ tenant_name: z.string().trim().min(1).max(200), email: Email, password: Password }),
-        response: { 201: Session, 409: ProblemSchema, 422: ProblemSchema },
+        body: z.object({
+          invite_code: z.string().trim(),
+          tenant_name: z.string().trim().min(1).max(200),
+          email: Email,
+          password: Password,
+        }),
+        response: { 201: Session, 403: ProblemSchema, 409: ProblemSchema, 422: ProblemSchema },
       },
     },
     async (request, reply) => {
-      const { tenant_name, email, password } = request.body;
+      const { invite_code, tenant_name, email, password } = request.body;
+      const badInvite = () =>
+        new Problem(403, "invalid-invite", "Invite code is invalid, already used or expired");
+      if (!INVITE_PATTERN.test(invite_code)) throw badInvite();
       const passwordHash = await hashPassword(password);
       let row: { o_tenant_id: string; o_user_id: string };
       try {
         row = await withoutTenant(db, async (tx) => {
-          const r = await tx.query("SELECT * FROM control.register_tenant($1, $2, $3)", [
+          const r = await tx.query("SELECT * FROM control.register_with_invite($1, $2, $3, $4)", [
+            inviteHash(invite_code),
             tenant_name,
             email,
             passwordHash,
@@ -90,6 +101,7 @@ export async function authRoutes(app: FastifyInstance) {
           return r.rows[0];
         });
       } catch (e) {
+        if ((e as { code?: string }).code === "RLINV") throw badInvite();
         if ((e as { code?: string }).code === "23505")
           throw new Problem(409, "email-taken", "That email is already registered");
         throw e;
@@ -109,11 +121,33 @@ export async function authRoutes(app: FastifyInstance) {
       schema: {
         security: [],
         body: z.object({ email: Email, password: z.string().max(200) }),
-        response: { 200: Session, 401: ProblemSchema },
+        response: { 200: Session, 401: ProblemSchema, 429: ProblemSchema, 503: ProblemSchema },
       },
     },
     async (request, reply) => {
       const { email, password } = request.body;
+      const limited = async <T>(fn: () => Promise<T>): Promise<T> => {
+        try {
+          return await fn();
+        } catch (e) {
+          if (e instanceof LimiterUnavailable) {
+            request.log.error({ err: e }, "login limiter unavailable");
+            throw new Problem(503, "unavailable", "Login is temporarily unavailable");
+          }
+          throw e;
+        }
+      };
+      const wait = await limited(() => loginLimiter.retryAfter(request.ip, email));
+      if (wait > 0) {
+        throw new Problem(
+          429,
+          "too-many-attempts",
+          "Too many failed logins",
+          "Try again later.",
+          {},
+          { "Retry-After": String(wait) },
+        );
+      }
       const user = await withoutTenant(db, async (tx) => {
         const r = await tx.query("SELECT * FROM control.user_for_login($1)", [email]);
         return r.rows[0] as
@@ -122,8 +156,10 @@ export async function authRoutes(app: FastifyInstance) {
       });
       // Same work and the same answer whether the email or the password was wrong.
       if (!(await passwordMatches(user?.o_password_hash, password)) || !user) {
+        await limited(() => loginLimiter.recordFailure(request.ip, email));
         throw unauthorized("wrong email or password");
       }
+      await limited(() => loginLimiter.recordSuccess(email));
       return reply.send(
         await startSession(
           reply,

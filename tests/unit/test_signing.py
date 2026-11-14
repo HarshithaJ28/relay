@@ -69,7 +69,7 @@ def test_malformed_secret_is_rejected(bad):
 
 # Official test vector from the Standard Webhooks repository
 # (github.com/standard-webhooks/standard-webhooks, libraries/go/webhook_test.go, TestWebhookSign).
-OFFICIAL_SECRET = "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw"
+OFFICIAL_SECRET = "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw"  # gitleaks:allow (public test vector)
 OFFICIAL_MSG_ID = "msg_p5jXN8AQM9LWM0D4loKWxJek"
 OFFICIAL_TS = 1614265330
 OFFICIAL_BODY = b'{"test": 2432232314}'

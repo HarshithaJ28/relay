@@ -1,0 +1,129 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- $np := .Values.networkPolicy }}
+{{- $blocked := concat $np.blockedCidrs $np.extraBlockedCidrs }}
+# Everything in the release is denied in both directions unless a policy below allows it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: relay-default-deny
+  labels:
+    {{- include "relay.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: relay
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes: [Ingress, Egress]
+---
+# Webhook senders: DNS, the datastores, and public IPv4 only. Private, loopback, CGNAT,
+# link-local (including the 169.254.169.254 metadata address), reserved and multicast
+# ranges are excluded, which also covers pod, service and node addresses. This is the
+# second SSRF layer: it holds even if the sender's own checks were bypassed.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: relay-worker-egress
+  labels:
+    {{- include "relay.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "relay.selector" (dict "root" . "component" "worker") | nindent 6 }}
+  policyTypes: [Egress]
+  egress:
+    {{- include "relay.np.dns" . | nindent 4 }}
+    {{- include "relay.np.to" (dict "root" . "component" "postgres" "port" 5432) | nindent 4 }}
+    {{- include "relay.np.to" (dict "root" . "component" "rabbitmq" "port" 5672) | nindent 4 }}
+    {{- include "relay.np.to" (dict "root" . "component" "valkey" "port" 6379) | nindent 4 }}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              {{- toYaml $blocked | nindent 14 }}
+---
+# Data-plane processes that send nothing outside: DNS and the datastores.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: relay-internal-egress
+  labels:
+    {{- include "relay.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - { key: app.kubernetes.io/name, operator: In, values: [relay] }
+      - { key: app.kubernetes.io/instance, operator: In, values: [{{ .Release.Name }}] }
+      - { key: app.kubernetes.io/component, operator: In, values: [scheduler, reaper, publisher, retention, ingest] }
+  policyTypes: [Egress]
+  egress:
+    {{- include "relay.np.dns" . | nindent 4 }}
+    {{- include "relay.np.to" (dict "root" . "component" "postgres" "port" 5432) | nindent 4 }}
+    {{- include "relay.np.to" (dict "root" . "component" "rabbitmq" "port" 5672) | nindent 4 }}
+    {{- include "relay.np.to" (dict "root" . "component" "valkey" "port" 6379) | nindent 4 }}
+---
+# The control plane: DNS (save-time destination checks), the datastores, and public
+# HTTPS for Stripe. The same ranges as the worker are excluded.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: relay-control-plane-egress
+  labels:
+    {{- include "relay.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "relay.selector" (dict "root" . "component" "control-plane") | nindent 6 }}
+  policyTypes: [Egress]
+  egress:
+    {{- include "relay.np.dns" . | nindent 4 }}
+    {{- include "relay.np.to" (dict "root" . "component" "postgres" "port" 5432) | nindent 4 }}
+    {{- include "relay.np.to" (dict "root" . "component" "valkey" "port" 6379) | nindent 4 }}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              {{- toYaml $blocked | nindent 14 }}
+      ports:
+        - { protocol: TCP, port: 443 }
+---
+# The migration job: DNS and PostgreSQL.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: relay-migrate-egress
+  labels:
+    {{- include "relay.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "relay.selector" (dict "root" . "component" "migrate") | nindent 6 }}
+  policyTypes: [Egress]
+  egress:
+    {{- include "relay.np.dns" . | nindent 4 }}
+    {{- include "relay.np.to" (dict "root" . "component" "postgres" "port" 5432) | nindent 4 }}
+---
+# Public entry points: only the ingress controller reaches the API and ingestion.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: relay-public-ingress
+  labels:
+    {{- include "relay.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - { key: app.kubernetes.io/name, operator: In, values: [relay] }
+      - { key: app.kubernetes.io/instance, operator: In, values: [{{ .Release.Name }}] }
+      - { key: app.kubernetes.io/component, operator: In, values: [control-plane, ingest] }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: {{ $np.ingressController.namespace }} }
+          podSelector:
+            matchLabels:
+              {{- toYaml $np.ingressController.podLabels | nindent 14 }}
+      ports:
+        - { protocol: TCP, port: 8080 }
+        - { protocol: TCP, port: 8081 }
+{{- end }}

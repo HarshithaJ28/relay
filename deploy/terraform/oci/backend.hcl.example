@@ -1,0 +1,4 @@
+# Copy to backend.hcl (git-ignored) and fill in from the bootstrap outputs.
+bucket    = "relay-tfstate"
+region    = "us-ashburn-1"
+endpoints = { s3 = "https://<namespace>.compat.objectstorage.us-ashburn-1.oraclecloud.com" }

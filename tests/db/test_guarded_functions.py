@@ -248,6 +248,23 @@ def test_claim_rejects_wrong_token_wrong_seq_and_wrong_status(connect, factory):
     assert claim(connect, sched, 0, tok(), tok()) == []  # not queued
 
 
+def test_claim_with_missing_event_changes_nothing(connect, factory):
+    """An orphaned delivery (its event row is gone) must not be leased: the event check
+    is part of the UPDATE, so the row stays exactly as it was (migration 0012)."""
+    d = factory.delivery()
+    seq, dtok = dispatch(connect, factory, d)
+    before = factory.row(d)
+    with connect("postgres") as su:
+        su.execute(
+            "DELETE FROM delivery.events WHERE id = %s AND created_at = %s",
+            (before["event_id"], before["event_created_at"]),
+        )
+    assert claim(connect, d, seq, dtok, tok()) == []
+    after = factory.row(d)
+    assert after == before
+    assert after["status"] == "queued" and after["lease_token_hash"] is None
+
+
 def test_duplicate_message_cannot_claim_twice(connect, factory):
     d = factory.delivery()
     seq, dtok = dispatch(connect, factory, d)

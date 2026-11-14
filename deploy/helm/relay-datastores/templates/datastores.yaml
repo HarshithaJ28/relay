@@ -1,0 +1,152 @@
+{{- $b := .Values }}
+{{- range $name, $spec := dict "postgres" (dict "port" 5432 "path" "/var/lib/postgresql/data" "storage" .Values.postgres.storage) "rabbitmq" (dict "port" 5672 "path" "/var/lib/rabbitmq" "storage" .Values.rabbitmq.storage) }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: relay-{{ $name }}
+  labels:
+    {{- include "relay.labels" $ | nindent 4 }}
+spec:
+  clusterIP: None
+  selector:
+    {{- include "relay.selector" (dict "root" $ "component" $name) | nindent 4 }}
+  ports:
+    - { name: main, port: {{ $spec.port }} }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: relay-{{ $name }}
+  labels:
+    {{- include "relay.labels" $ | nindent 4 }}
+    {{- include "relay.selector" (dict "root" $ "component" $name) | nindent 4 }}
+spec:
+  serviceName: relay-{{ $name }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "relay.selector" (dict "root" $ "component" $name) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "relay.labels" $ | nindent 8 }}
+        {{- include "relay.selector" (dict "root" $ "component" $name) | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      {{- if eq $name "postgres" }}
+      securityContext: { runAsNonRoot: true, runAsUser: 999, runAsGroup: 999, fsGroup: 999, seccompProfile: { type: RuntimeDefault } }
+      volumes:
+        - { name: tmp, emptyDir: { sizeLimit: 64Mi } }
+        - { name: run, emptyDir: { sizeLimit: 8Mi } }
+      containers:
+        - name: postgres
+          image: {{ $b.postgres.image }}
+          {{- include "relay.containerSecurity" $ | nindent 10 }}
+          env:
+            - { name: POSTGRES_DB, value: {{ $.Values.database.name | quote }} }
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ $.Values.secrets.name }}, key: postgres-password } }
+          readinessProbe:
+            exec: { command: ["pg_isready", "-U", "postgres", "-d", {{ $.Values.database.name | quote }}] }
+            periodSeconds: 5
+          resources:
+            {{- toYaml $b.postgres.resources | nindent 12 }}
+      {{- else }}
+      securityContext: { runAsNonRoot: true, runAsUser: 999, runAsGroup: 999, fsGroup: 999, seccompProfile: { type: RuntimeDefault } }
+      volumes:
+        - { name: tmp, emptyDir: { sizeLimit: 64Mi } }
+        - { name: etc, emptyDir: { sizeLimit: 8Mi } }
+      containers:
+        - name: rabbitmq
+          image: {{ $b.rabbitmq.image }}
+          {{- include "relay.containerSecurity" $ | nindent 10 }}
+          env:
+            - { name: RABBITMQ_LOGS, value: "-" }
+            - { name: RABBITMQ_DEFAULT_USER, value: {{ $.Values.amqp.user | quote }} }
+            - name: RABBITMQ_DEFAULT_PASS
+              valueFrom: { secretKeyRef: { name: {{ $.Values.secrets.name }}, key: amqp-password } }
+          readinessProbe:
+            exec: { command: ["rabbitmq-diagnostics", "-q", "ping"] }
+            periodSeconds: 10
+            timeoutSeconds: 8
+          resources:
+            {{- toYaml $b.rabbitmq.resources | nindent 12 }}
+      {{- end }}
+          ports:
+            - { name: main, containerPort: {{ $spec.port }} }
+          volumeMounts:
+            - { name: data, mountPath: {{ $spec.path }} }
+            - { name: tmp, mountPath: /tmp }
+            {{- if eq $name "postgres" }}
+            - { name: run, mountPath: /var/run/postgresql }
+            {{- else }}
+            - { name: etc, mountPath: /etc/rabbitmq }
+            {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with $.Values.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $spec.storage }}
+{{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: relay-valkey
+  labels:
+    {{- include "relay.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "relay.selector" (dict "root" . "component" "valkey") | nindent 4 }}
+  ports:
+    - { name: main, port: 6379 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: relay-valkey
+  labels:
+    {{- include "relay.labels" . | nindent 4 }}
+    {{- include "relay.selector" (dict "root" . "component" "valkey") | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "relay.selector" (dict "root" . "component" "valkey") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "relay.labels" . | nindent 8 }}
+        {{- include "relay.selector" (dict "root" . "component" "valkey") | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: { runAsNonRoot: true, runAsUser: 999, runAsGroup: 999, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: valkey
+          image: {{ $b.valkey.image }}
+          # Counters, breaker state and pub/sub only: nothing here needs to survive a restart.
+          args: ["valkey-server", "--requirepass", "$(VALKEY_PASSWORD)", "--save", "", "--appendonly", "no"]
+          env:
+            - name: VALKEY_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ .Values.secrets.name }}, key: valkey-password } }
+          {{- include "relay.containerSecurity" . | nindent 10 }}
+          ports:
+            - { name: main, containerPort: 6379 }
+          readinessProbe:
+            tcpSocket: { port: main }
+            periodSeconds: 5
+          resources:
+            {{- toYaml $b.valkey.resources | nindent 12 }}
+          volumeMounts:
+            - { name: data, mountPath: /data }
+      volumes:
+        - name: data
+          emptyDir: {}

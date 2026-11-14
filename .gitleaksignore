@@ -1,0 +1,2 @@
+# Public Standard Webhooks test vector (tests/unit/test_signing.py), not a secret.
+d5b81b7a65d3dfe720d045dd4e74bea02896afa1:tests/unit/test_signing.py:generic-api-key:72

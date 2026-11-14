@@ -12,6 +12,7 @@ import type Stripe from "stripe";
 import { type Principal, type Role, verifyAccessToken } from "./auth.js";
 import type { Config } from "./config.js";
 import type { Db } from "./db.js";
+import type { LoginLimiter } from "./loginLimit.js";
 import { forbidden, Problem, unauthorized } from "./problem.js";
 import { authRoutes } from "./routes/auth.js";
 import { billingRoutes } from "./routes/billing.js";
@@ -30,6 +31,7 @@ export interface Deps {
   db: Db;
   keyring: Keyring;
   resolve: Resolver;
+  loginLimiter: LoginLimiter;
   stripe?: Pick<Stripe, "checkout" | "webhooks">;
   subscribe?: Subscribe;
 }
@@ -52,7 +54,9 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
       redact: ["req.headers.authorization", "req.headers.cookie"],
     },
     bodyLimit: 256 * 1024,
-    trustProxy: true,
+    // Only the configured number of proxy hops; trusting any X-Forwarded-For would let a
+    // client pick its own IP and get around the per-IP login limit.
+    trustProxy: (_address: string, hop: number) => hop < deps.config.trustedProxyHops,
   }).withTypeProvider<ZodTypeProvider>();
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);

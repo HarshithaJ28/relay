@@ -3,6 +3,7 @@ import { buildApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import { createPool } from "./db.js";
 import { valkeySubscriber } from "./live.js";
+import { valkeyLoginLimiter } from "./loginLimit.js";
 import { Keyring } from "./secrets.js";
 import { systemResolver } from "./ssrf.js";
 
@@ -22,8 +23,9 @@ async function main(): Promise<number> {
     db,
     keyring,
     resolve: systemResolver,
+    loginLimiter: valkeyLoginLimiter(config.valkeyUrl, config.login),
     ...(config.stripe.secretKey ? { stripe: new Stripe(config.stripe.secretKey) } : {}),
-    ...(config.valkeyUrl ? { subscribe: valkeySubscriber(config.valkeyUrl) } : {}),
+    subscribe: valkeySubscriber(config.valkeyUrl),
   });
   const stop = async (signal: string) => {
     app.log.info({ signal }, "shutting down");

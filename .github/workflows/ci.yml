@@ -51,6 +51,9 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-dev.txt
       - run: pip install -r requirements-dev.txt
+      # psql runs db/migrate.sh in tests/deploy.
+      - name: Install the PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client
       # Real PostgreSQL 16 and RabbitMQ in containers (testcontainers); nothing is mocked or skipped.
       - name: pytest
         run: python -m pytest -ra --junitxml=test-results.xml

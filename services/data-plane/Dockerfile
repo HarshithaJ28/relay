@@ -16,6 +16,8 @@ LABEL org.opencontainers.image.source="https://github.com/HarshithaJ28/relay" \
 ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
+# Security fixes published after the base image was built.
+RUN apt-get update && apt-get upgrade -y --no-install-recommends && rm -rf /var/lib/apt/lists/*
 RUN useradd --system --uid 10001 --no-create-home --shell /usr/sbin/nologin relay
 COPY --from=build /opt/venv /opt/venv
 COPY services/data-plane/relay_dataplane /app/relay_dataplane

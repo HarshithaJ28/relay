@@ -1,0 +1,9 @@
+apiVersion: v2
+name: relay
+description: Relay webhook delivery platform (data plane, control plane, migrations and network policies)
+type: application
+version: 0.1.0
+appVersion: "main"
+home: https://github.com/HarshithaJ28/relay
+sources:
+  - https://github.com/HarshithaJ28/relay

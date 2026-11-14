@@ -1,0 +1,78 @@
+name: Deploy
+
+# Deploys main to the Oracle k3s host after the images for that commit are published.
+# Off until the repository variable DEPLOY_ENABLED is "true" and these secrets exist in the
+# "production" environment:
+#   DEPLOY_HOST          the host's public address
+#   DEPLOY_SSH_KEY       private key for the deploy user
+#   DEPLOY_KNOWN_HOSTS   the host's SSH host key line (ssh-keyscan output, checked by hand)
+#   DEPLOY_KUBECONFIG    k3s kubeconfig with server https://127.0.0.1:6443
+#   DEPLOY_VALUES        the production values file (domain, extra blocked CIDRs)
+
+on:
+  workflow_run:
+    workflows: [Image]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to k3s
+    if: >-
+      vars.DEPLOY_ENABLED == 'true' &&
+      (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: production
+    env:
+      SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          ref: ${{ env.SHA }}
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
+        with:
+          version: v3.16.4
+      - uses: webfactory/ssh-agent@e83874834305fe9a4a2997156cb26c5de65a8555 # v0.10.0
+        with:
+          ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
+
+      - name: Open a tunnel to the Kubernetes API
+        env:
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          KUBECONFIG_TEXT: ${{ secrets.DEPLOY_KUBECONFIG }}
+          VALUES_TEXT: ${{ secrets.DEPLOY_VALUES }}
+        run: |
+          mkdir -p ~/.ssh ~/.kube && chmod 700 ~/.ssh
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          printf '%s\n' "$KUBECONFIG_TEXT" > ~/.kube/config && chmod 600 ~/.kube/config
+          printf '%s\n' "$VALUES_TEXT" > "$RUNNER_TEMP/values.yaml"
+          ssh -o StrictHostKeyChecking=yes -o ExitOnForwardFailure=yes -fN -L 6443:127.0.0.1:6443 "ubuntu@$HOST"
+          for i in $(seq 15); do kubectl version >/dev/null 2>&1 && break; sleep 2; done
+          kubectl get nodes
+
+      - name: Datastores
+        run: helm upgrade --install relay-data deploy/helm/relay-datastores -n relay --create-namespace --wait --timeout 10m
+
+      # --atomic rolls the release back if the migration job or any rollout fails.
+      - name: Relay
+        run: |
+          helm upgrade --install relay deploy/helm/relay -n relay --atomic --wait --timeout 10m \
+            -f "$RUNNER_TEMP/values.yaml" --set images.tag="sha-$SHA"
+
+      - name: Egress smoke test
+        run: helm test relay -n relay --logs --timeout 3m
+
+      - name: Status
+        if: always()
+        run: kubectl -n relay get pods,jobs -o wide || true

@@ -10,7 +10,7 @@ export function createPool(dsn: string, max = 10): Db {
 }
 
 /** libpq keyword DSNs ("host=... user=...") and URLs are both accepted. */
-function toConnectionString(dsn: string): string {
+export function toConnectionString(dsn: string): string {
   if (/^postgres(ql)?:\/\//.test(dsn)) return dsn;
   const parts = Object.fromEntries(
     dsn

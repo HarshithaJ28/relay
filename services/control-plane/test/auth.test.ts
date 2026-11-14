@@ -1,6 +1,6 @@
 import { SignJWT } from "jose";
 import { describe, expect, it } from "vitest";
-import { bearer, cleanDatabase, makeApp, refreshCookie, signup, su, testConfig } from "./helpers.js";
+import { bearer, cleanDatabase, invite, makeApp, refreshCookie, signup, su, testConfig } from "./helpers.js";
 
 cleanDatabase();
 
@@ -10,7 +10,12 @@ describe("registration and login", () => {
     const r = await app.inject({
       method: "POST",
       url: "/api/v1/auth/register",
-      payload: { tenant_name: "Acme", email: "Owner@Example.com", password: "correct horse battery" },
+      payload: {
+        invite_code: await invite(),
+        tenant_name: "Acme",
+        email: "Owner@Example.com",
+        password: "correct horse battery",
+      },
     });
     expect(r.statusCode).toBe(201);
     const body = r.json();
@@ -37,14 +42,24 @@ describe("registration and login", () => {
     const again = await app.inject({
       method: "POST",
       url: "/api/v1/auth/register",
-      payload: { tenant_name: "Other", email: "TAKEN@example.com", password: "correct horse battery" },
+      payload: {
+        invite_code: await invite(),
+        tenant_name: "Other",
+        email: "TAKEN@example.com",
+        password: "correct horse battery",
+      },
     });
     expect(again.statusCode).toBe(409);
     expect(again.headers["content-type"]).toMatch(/application\/problem\+json/);
     const weak = await app.inject({
       method: "POST",
       url: "/api/v1/auth/register",
-      payload: { tenant_name: "Other", email: "new@example.com", password: "short" },
+      payload: {
+        invite_code: await invite(),
+        tenant_name: "Other",
+        email: "new@example.com",
+        password: "short",
+      },
     });
     expect(weak.statusCode).toBe(422);
   });

@@ -5,4 +5,6 @@
 !services/control-plane/package-lock.json
 !services/control-plane/tsconfig.json
 !services/control-plane/src/
+!db/migrations/
+!db/migrate.sh
 **/__pycache__

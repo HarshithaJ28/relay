@@ -1,0 +1,7 @@
+apiVersion: v2
+name: relay-datastores
+description: Single-node PostgreSQL 16, RabbitMQ 3.13 and Valkey 8.1 for a small Relay deployment
+type: application
+version: 0.1.0
+appVersion: "1"
+home: https://github.com/HarshithaJ28/relay

@@ -1,0 +1,83 @@
+{{- range $name, $p := .Values.dataPlane.processes }}
+{{- $sel := dict "root" $ "component" $name }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: relay-{{ $name }}
+  labels:
+    {{- include "relay.labels" $ | nindent 4 }}
+    {{- include "relay.selector" $sel | nindent 4 }}
+spec:
+  replicas: {{ $p.replicas }}
+  selector:
+    matchLabels:
+      {{- include "relay.selector" $sel | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "relay.labels" $ | nindent 8 }}
+        {{- include "relay.selector" $sel | nindent 8 }}
+    spec:
+      {{- include "relay.podSecurity" $ | nindent 6 }}
+      terminationGracePeriodSeconds: 45
+      containers:
+        - name: {{ $name }}
+          image: {{ include "relay.image" (dict "root" $ "name" $.Values.images.dataPlane) }}
+          imagePullPolicy: {{ $.Values.images.pullPolicy }}
+          args: ["python", "-m", "relay_dataplane", "{{ $name }}"]
+          {{- include "relay.containerSecurity" $ | nindent 10 }}
+          env:
+            {{- include "relay.dbEnv" (dict "root" $ "role" $p.role "var" "RELAY_DSN") | nindent 12 }}
+            {{- if ne $name "retention" }}
+            {{- include "relay.amqpEnv" $ | nindent 12 }}
+            {{- end }}
+            {{- include "relay.valkeyEnv" $ | nindent 12 }}
+            {{- if eq $name "worker" }}
+            - name: RELAY_SECRET_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $.Values.secrets.name }}
+                  key: secret-keys
+            {{- end }}
+            {{- if eq $name "ingest" }}
+            - name: RELAY_INGEST_HOST
+              value: "0.0.0.0"
+            {{- end }}
+            {{- range $k, $v := $.Values.dataPlane.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          ports:
+            {{- if eq $name "ingest" }}
+            - { name: http, containerPort: 8080 }
+            {{- else }}
+            - { name: ops, containerPort: 9100 }
+            {{- end }}
+          readinessProbe:
+            httpGet: { path: /readyz, port: {{ if eq $name "ingest" }}http{{ else }}ops{{ end }} }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: {{ if eq $name "ingest" }}http{{ else }}ops{{ end }} }
+            periodSeconds: 20
+            failureThreshold: 3
+          resources:
+            {{- toYaml $p.resources | nindent 12 }}
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: { sizeLimit: 64Mi }
+{{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: relay-ingest
+  labels:
+    {{- include "relay.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "relay.selector" (dict "root" . "component" "ingest") | nindent 4 }}
+  ports:
+    - { name: http, port: 8080, targetPort: http }

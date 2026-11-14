@@ -1,0 +1,43 @@
+{{- if .Values.migrations.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: relay-migrate
+  labels:
+    {{- include "relay.labels" . | nindent 4 }}
+    {{- include "relay.selector" (dict "root" . "component" "migrate") | nindent 4 }}
+  annotations:
+    # Before the services start or change. The database must already exist (the
+    # relay-datastores chart, or a server of your own).
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.migrations.backoffLimit }}
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        {{- include "relay.labels" . | nindent 8 }}
+        {{- include "relay.selector" (dict "root" . "component" "migrate") | nindent 8 }}
+    spec:
+      {{- include "relay.podSecurity" . | nindent 6 }}
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: {{ include "relay.image" (dict "root" . "name" .Values.images.migrations) }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          {{- include "relay.containerSecurity" . | nindent 10 }}
+          env:
+            - name: DATABASE_URL
+              valueFrom: { secretKeyRef: { name: {{ .Values.secrets.name }}, key: postgres-superuser-url } }
+            {{- range $r := list "tenant" "control" "scheduler" "publisher" "worker" "reaper" "retention" "owner" }}
+            - name: RELAY_PASSWORD_{{ upper $r }}
+              valueFrom: { secretKeyRef: { name: {{ $.Values.secrets.name }}, key: password-{{ $r }}, optional: true } }
+            {{- end }}
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: { sizeLimit: 16Mi }
+{{- end }}

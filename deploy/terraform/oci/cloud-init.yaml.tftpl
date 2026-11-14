@@ -1,0 +1,8 @@
+#cloud-config
+# Ubuntu images on OCI reject inbound traffic with iptables except SSH; open 80, 443 and
+# 6443 (the security list still limits 6443 to admin_cidr), then install k3s.
+package_update: true
+runcmd:
+  - iptables -I INPUT 6 -p tcp -m multiport --dports 80,443,6443 -j ACCEPT
+  - netfilter-persistent save
+  - curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION='${k3s_version}' sh -s - --write-kubeconfig-mode 600 --secrets-encryption

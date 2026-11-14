@@ -93,10 +93,19 @@ Built (`db/migrations`, `services/data-plane/relay_dataplane`):
   field or `key=value` redacted (tracebacks included), and OpenTelemetry traces exported when
   `OTEL_EXPORTER_OTLP_ENDPOINT` is set. Wire-level library loggers never go below INFO, because AMQP frames
   carry message bodies. Grafana dashboard and Prometheus alert rules: `deploy/grafana`.
-- Control plane (`services/control-plane`, migration 0011):
-  - accounts: registration creates a tenant and its owner; argon2id passwords; short-lived JWT access tokens;
+- Control plane (`services/control-plane`, migrations 0011 and 0013):
+  - accounts: registration needs a single-use, expiring invite code and creates a tenant and its owner;
+    argon2id passwords; short-lived JWT access tokens;
     rotating refresh tokens in an httpOnly, SameSite=Strict cookie, where reusing an old token revokes the
     whole session family; roles owner, admin and viewer;
+  - login throttling in Valkey: after 5 failed logins for one account, or 20 from one IP, within 15 minutes,
+    that account or IP gets 429 with `Retry-After` for 15 minutes, even with the right password (settings
+    `RELAY_LOGIN_MAX_FAILURES_PER_ACCOUNT`, `RELAY_LOGIN_MAX_FAILURES_PER_IP`, `RELAY_LOGIN_LOCK_SECONDS`).
+    Accounts are keyed by a hash of the email. If Valkey is down, login answers 503. `X-Forwarded-For` is
+    believed only for `RELAY_TRUSTED_PROXY_HOPS` proxies (default 0), so a client cannot choose its own IP;
+  - invite codes are made by the operator, connected as `relay_owner` (`RELAY_OPERATOR_DSN`):
+    `npm run create-invite -- --days 7 --note "for a reviewer"` (in the image:
+    `node dist/cli.js create-invite --days 7`) prints the code once; only its SHA-256 is stored;
   - endpoints with save-time SSRF checks (URL and current DNS answers; the same corpus as the data plane), the
     plan's endpoint limit, encrypted signing secrets (the data plane's format; each language decrypts the
     other's), rotation with an overlap window, test events and health;
@@ -109,7 +118,12 @@ Built (`db/migrations`, `services/data-plane/relay_dataplane`):
     `/api/v1/openapi.json`, RFC 9457 errors.
   It connects as its own role, `relay_control`, bound by row-level security like ingestion's `relay_tenant`,
   which stays narrower (no endpoint URLs). Functions that run before a tenant is known (register, login lookup,
-  session rotation, Stripe events) are owned by the plain role `relay_auth`.
+  session rotation, Stripe events) are owned by the plain role `relay_auth`. `RELAY_VALKEY_URL` is required.
+- Deployment (`deploy/`, `docs/deploy.md`): Helm charts `relay` (the services, an Ingress for `/api` and
+  `/ingest`, NetworkPolicies, and a `helm test` egress smoke test) and `relay-datastores` (single-node
+  PostgreSQL, RabbitMQ and Valkey); a migration image (`db/migrate.sh`) that applies each new file in one
+  transaction before every install and upgrade; Terraform for one Oracle Always Free k3s machine (state in OCI
+  Object Storage) and a validate-only AWS equivalent with a billing alert.
 - Long-running processes (`python -m relay_dataplane worker|scheduler|reaper|publisher|ingest|retention`, one
   image):
   - worker: consumes with a prefetch limit, checks by the database clock that the lease outlives the request
@@ -150,7 +164,17 @@ Control-plane tests (Node 22; the same real PostgreSQL with these migrations, an
   `v*.*.*` tags it pushes a linux/amd64 + linux/arm64 image to `ghcr.io/harshithaj28/relay-data-plane` with an
   SBOM and a build-provenance attestation.
 - `ci.yml` also runs the control plane's typecheck, Biome lint, tests and `npm audit`, and `image.yml` builds,
-  smoke-tests and publishes `ghcr.io/harshithaj28/relay-control-plane` the same way.
+  smoke-tests and publishes `ghcr.io/harshithaj28/relay-control-plane` and `ghcr.io/harshithaj28/relay-migrations`
+  the same way. Each image is scanned with Trivy before it is pushed, and a fixable HIGH or CRITICAL finding
+  fails the build.
+- `infra.yml`: `helm lint` and `kubeconform` for both charts; `terraform fmt`, `validate` (no credentials, no
+  backend) and `tflint` for the three Terraform stacks; a Trivy configuration scan; and a job that installs real
+  k3s on the runner, deploys both charts with images built from the commit, checks the API through Traefik, runs
+  the egress smoke test, then repeats it with the NetworkPolicies off and requires it to fail.
+- `security.yml`: gitleaks over the full history, CodeQL (Python, TypeScript and the workflows) and OpenSSF
+  Scorecard.
+- `deploy.yml`: after the images for a commit on main are published, upgrades both releases on the k3s host over
+  an SSH tunnel and runs the egress smoke test. Off until `DEPLOY_ENABLED` is set (see `docs/deploy.md`).
 - Dependabot opens weekly grouped updates for GitHub Actions (pinned to commit SHAs), pip, npm and the base
   image.
 
@@ -221,7 +245,11 @@ Control-plane tests (Node 22; the same real PostgreSQL with these migrations, an
   contain message bodies, at DEBUG.
 - Every process serves metrics, health and readiness, its counters reflect its work, and every log line is JSON;
   the dashboard and alert rules reference only exported metrics.
-- Control plane (123 tests, real PostgreSQL and Valkey): sessions and token rotation with reuse detection,
+- Control plane (136 tests, real PostgreSQL and Valkey): invite codes (single use, expiry, a taken email
+  leaves the code usable, three simultaneous registrations with one code give one tenant, only the operator
+  role makes codes), login throttling (account and IP locks, unlock after the lock time, a successful login
+  clearing the count, unknown emails locked the same way, spoofed `X-Forwarded-For` ignored, 503 when Valkey
+  is unreachable, no email in Valkey), sessions and token rotation with reuse detection,
   tampered, expired, foreign-key and foreign-audience tokens refused, roles, the spec's isolation test (another
   tenant calls every route with this tenant's ids and gets 404), SSRF corpus and DNS checks at save time, plan
   limits, secret rotation, AC-3 payload hiding, replay and bulk replay, pagination that never skips rows created
@@ -234,15 +262,17 @@ Control-plane tests (Node 22; the same real PostgreSQL with these migrations, an
   ingestion (13 mutants plus each of the 8 tenant policies), retention and transformations (20 mutants),
   bounded dispatching (7 mutants) and the circuit breaker and rate limit (24 mutants; two survivors showed
   redundant code, which was removed), and replay, dead-lettering, live updates, maintenance, the key cache and
-  the control plane's guards (about 50 more).
+  the control plane's guards (about 50 more, plus 9 for invites and login throttling).
 
 ### Known limitations
 
 - No performance, throughput or latency numbers exist. None have been measured.
 - RabbitMQ ran as a single node. Nothing here supports a high-availability claim.
 - The harness and `docker-compose.yml` were run on Linux (Docker 29) only, not yet on macOS or Windows.
-- There is no deployment step: CI publishes an image but nothing deploys it. kind/k3s, Helm and Terraform do
-  not exist yet.
+- Nothing has been deployed. The Helm charts, Terraform stacks and deploy job exist; the charts were checked with
+  `helm lint` and `kubeconform`, and Terraform with `validate` and `tflint`, but `infra.yml`'s k3s job (which
+  installs the charts and runs the egress smoke test on a real cluster) has not run yet, and no Terraform stack
+  has been applied. The datastores run as single pods on one node.
 - The processes have run only as local subprocesses with shrunk timings (1 s request timeout, sub-second
   retries), not in a cluster and not with the production defaults. Outages were 5 s long; longer ones and
   network partitions have not been tested.
@@ -251,17 +281,15 @@ Control-plane tests (Node 22; the same real PostgreSQL with these migrations, an
 - Billing has never called the real Stripe API: checkout uses a stand-in client in tests, and webhooks are
   checked with Stripe's own signing scheme. Plan limits other than endpoint count, retention, rates and the
   dispatch cap (for example events per month) are shown in usage but not enforced.
-- There is no login rate limiting or account lockout yet, no email verification, no password reset and no
-  invitation flow (owners create users with a password).
+- No email verification and no password reset; owners create users with a password. The account lock means
+  anyone who knows an email can keep that account locked out (5 tries every 15 minutes); the per-IP lock
+  limits how many accounts one IP can do this to, not how many IPs try.
 - Usage totals are recomputed from the source tables instead of the spec's Valkey counters.
 - The real transformation runner (Node, JSONata) does not exist; AC-2 was tested against an HTTP runner double
   that follows the documented protocol. There is no runner circuit breaker yet.
-- If a claimed delivery's event row were missing, `claim_delivery` would still mark it in flight and the reaper
-  would reclaim it (bounded by the 12-attempt limit). Ingestion writes both in one transaction, so this needs
-  manual tampering; it is noted, not fixed.
 - The HTTP sender has only sent to a local test receiver, never to a real public endpoint, and only with
-  scripted DNS in tests. The Kubernetes NetworkPolicy and the post-deploy egress smoke test (the second SSRF
-  layer) do not exist yet.
+  scripted DNS in tests. The NetworkPolicies and the egress smoke test (the second SSRF layer) exist but have not
+  yet run on a cluster.
 - Master keys are read from the environment or a file; no KMS integration. Re-encrypting stored secrets after a
   master-key change is a library function (`reencrypt`) with no job or command that runs it yet.
 - The breaker's defaults (60 s window, 10 results, 50 % failures, 30 s cool-down up to 10 min) and the tenant

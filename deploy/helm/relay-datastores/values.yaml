@@ -1,0 +1,31 @@
+# Install once, before the relay chart, in the same namespace:
+#   helm install relay-data deploy/helm/relay-datastores -n relay
+# Passwords come from the same existing Secret the relay chart uses.
+
+secrets:
+  name: relay-secrets
+
+database:
+  name: relay
+
+amqp:
+  user: relay
+
+storageClass: ""
+
+postgres:
+  image: postgres:16
+  storage: 8Gi
+  resources: { requests: { cpu: 100m, memory: 256Mi }, limits: { memory: 1Gi } }
+
+rabbitmq:
+  image: rabbitmq:3.13
+  storage: 2Gi
+  resources: { requests: { cpu: 100m, memory: 256Mi }, limits: { memory: 768Mi } }
+
+valkey:
+  image: valkey/valkey:8.1
+  resources: { requests: { cpu: 25m, memory: 64Mi }, limits: { memory: 256Mi } }
+
+networkPolicy:
+  enabled: true

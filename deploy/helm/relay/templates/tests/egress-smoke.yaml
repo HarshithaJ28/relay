@@ -1,0 +1,63 @@
+{{- if .Values.egressSmokeTest.enabled }}
+# helm test: a pod with the worker's labels, so the worker's NetworkPolicy applies to it,
+# tries to reach what a webhook must never reach. Every attempt must fail; the test fails
+# if any connection succeeds.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: relay-egress-smoke
+  labels:
+    {{- include "relay.labels" . | nindent 4 }}
+    {{- include "relay.selector" (dict "root" . "component" "worker") | nindent 4 }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  {{- include "relay.podSecurity" . | nindent 2 }}
+  restartPolicy: Never
+  containers:
+    - name: smoke
+      image: {{ include "relay.image" (dict "root" . "name" .Values.images.dataPlane) }}
+      imagePullPolicy: {{ .Values.images.pullPolicy }}
+      {{- include "relay.containerSecurity" . | nindent 6 }}
+      env:
+        - name: NODE_IP
+          valueFrom: { fieldRef: { fieldPath: status.hostIP } }
+        - name: PUBLIC_HOST
+          value: {{ .Values.egressSmokeTest.publicHost | quote }}
+        - name: TARGETS
+          value: >-
+            kubernetes.default.svc:443
+            relay-control-plane:8081
+            relay-ingest:8080
+            $(NODE_IP):10250
+            $(NODE_IP):6443
+            $(NODE_IP):22
+            169.254.169.254:80
+            {{- range .Values.networkPolicy.extraBlockedCidrs }}
+            {{ (split "/" .)._0 }}:443
+            {{- end }}
+      command:
+        - python
+        - -c
+        - |
+          import os, socket, sys
+          failed = []
+          for target in os.environ["TARGETS"].split():
+              host, port = target.rsplit(":", 1)
+              try:
+                  socket.create_connection((host, int(port)), timeout=3).close()
+                  failed.append(target)
+                  print(f"REACHABLE (must not be): {target}")
+              except OSError as e:
+                  print(f"blocked: {target} ({type(e).__name__})")
+          public = os.environ.get("PUBLIC_HOST")
+          if public:
+              try:
+                  socket.create_connection((public, 443), timeout=5).close()
+                  print(f"reachable as required: {public}:443")
+              except OSError as e:
+                  failed.append(f"{public}:443 unreachable")
+                  print(f"UNREACHABLE (must be reachable): {public}:443 ({e})")
+          sys.exit(1 if failed else 0)
+{{- end }}

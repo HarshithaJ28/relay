@@ -1,0 +1,125 @@
+# Relay chart values. Secrets are never set here: the chart reads them from an existing
+# Secret (secrets.name). See the chart README for the keys it expects.
+
+images:
+  registry: ghcr.io/harshithaj28
+  # One tag for all three images; the deploy job sets it to the commit's sha-<long> tag.
+  tag: main
+  pullPolicy: IfNotPresent
+  # Names of docker-registry Secrets, if the GHCR packages are private.
+  pullSecrets: []
+  dataPlane: relay-data-plane
+  controlPlane: relay-control-plane
+  migrations: relay-migrations
+
+secrets:
+  # Existing Secret with the keys listed in the chart README.
+  name: relay-secrets
+
+# Public origin of the deployment, used in links the API returns.
+publicUrl: https://relay.example.duckdns.org
+
+ingress:
+  enabled: true
+  className: traefik
+  host: relay.example.duckdns.org
+  # Secret holding the TLS certificate for host (for example from cert-manager).
+  tlsSecretName: relay-tls
+  annotations: {}
+
+# Where the datastores are. The defaults match the relay-datastores chart installed in the
+# same namespace; point them elsewhere to use other servers.
+database:
+  host: relay-postgres
+  port: 5432
+  name: relay
+  sslmode: disable
+
+amqp:
+  host: relay-rabbitmq
+  port: 5672
+  user: relay
+
+valkey:
+  host: relay-valkey
+  port: 6379
+
+# Settings passed to every data-plane process (see relay_dataplane/settings.py).
+dataPlane:
+  env:
+    RELAY_LOG_LEVEL: INFO
+  processes:
+    worker:
+      replicas: 1
+      role: relay_worker
+      resources: { requests: { cpu: 100m, memory: 160Mi }, limits: { memory: 384Mi } }
+    scheduler:
+      replicas: 1
+      role: relay_scheduler
+      resources: { requests: { cpu: 50m, memory: 96Mi }, limits: { memory: 256Mi } }
+    reaper:
+      replicas: 1
+      role: relay_reaper
+      resources: { requests: { cpu: 25m, memory: 96Mi }, limits: { memory: 256Mi } }
+    publisher:
+      replicas: 1
+      role: relay_publisher
+      resources: { requests: { cpu: 50m, memory: 96Mi }, limits: { memory: 256Mi } }
+    retention:
+      replicas: 1
+      role: relay_retention
+      resources: { requests: { cpu: 25m, memory: 96Mi }, limits: { memory: 256Mi } }
+    ingest:
+      replicas: 1
+      role: relay_tenant
+      resources: { requests: { cpu: 100m, memory: 160Mi }, limits: { memory: 384Mi } }
+
+controlPlane:
+  replicas: 1
+  # Traefik is one proxy hop in front of the API; its X-Forwarded-For is believed.
+  trustedProxyHops: 1
+  env:
+    RELAY_LOG_LEVEL: info
+  resources: { requests: { cpu: 100m, memory: 160Mi }, limits: { memory: 384Mi } }
+
+migrations:
+  # Runs before every install and upgrade (Helm hook). Uses the superuser URL in the Secret.
+  enabled: true
+  backoffLimit: 1
+
+networkPolicy:
+  enabled: true
+  # Where the ingress controller runs (k3s: Traefik in kube-system).
+  ingressController:
+    namespace: kube-system
+    podLabels:
+      app.kubernetes.io/name: traefik
+  # Where cluster DNS runs.
+  dns:
+    namespace: kube-system
+    podLabels:
+      k8s-app: kube-dns
+  # Webhook sends may reach any IPv4 address except these. Add the node's public IP
+  # (as a /32) so a webhook cannot be pointed back at the node through it.
+  blockedCidrs:
+    - 0.0.0.0/8
+    - 10.0.0.0/8
+    - 100.64.0.0/10
+    - 127.0.0.0/8
+    - 169.254.0.0/16
+    - 172.16.0.0/12
+    - 192.0.0.0/24
+    - 192.0.2.0/24
+    - 192.168.0.0/16
+    - 198.18.0.0/15
+    - 198.51.100.0/24
+    - 203.0.113.0/24
+    - 224.0.0.0/4
+    - 240.0.0.0/4
+  extraBlockedCidrs: []
+
+# helm test: from a pod with the worker's network identity, these must all be refused.
+egressSmokeTest:
+  enabled: true
+  # Also require that a public HTTPS host is reachable (off where the cluster has no internet).
+  publicHost: ""

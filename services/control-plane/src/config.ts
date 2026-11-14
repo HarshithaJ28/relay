@@ -11,13 +11,17 @@ const EnvSchema = z.object({
   RELAY_JWT_SECRET: z.string().min(32, "RELAY_JWT_SECRET must be at least 32 characters"),
   RELAY_SECRET_KEYS: z.string().optional(),
   RELAY_SECRET_KEYS_FILE: z.string().optional(),
-  RELAY_VALKEY_URL: z.string().optional(),
+  RELAY_VALKEY_URL: z.string().min(1, "RELAY_VALKEY_URL is required (login throttling and live updates)"),
   RELAY_PUBLIC_URL: z.string().url().default("http://localhost:8081"),
   RELAY_CONTROL_HOST: z.string().default("0.0.0.0"),
   RELAY_CONTROL_PORT: z.coerce.number().int().min(1).max(65535).default(8081),
   RELAY_COOKIE_SECURE: flagOn,
   RELAY_ACCESS_TOKEN_SECONDS: z.coerce.number().int().min(60).max(3600).default(900),
   RELAY_REFRESH_TOKEN_DAYS: z.coerce.number().int().min(1).max(90).default(30),
+  RELAY_LOGIN_MAX_FAILURES_PER_ACCOUNT: z.coerce.number().int().min(1).max(100).default(5),
+  RELAY_LOGIN_MAX_FAILURES_PER_IP: z.coerce.number().int().min(1).max(10_000).default(20),
+  RELAY_LOGIN_LOCK_SECONDS: z.coerce.number().int().min(1).max(86_400).default(900),
+  RELAY_TRUSTED_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(0),
   RELAY_ALLOW_HTTP: flag,
   RELAY_ALLOW_PRIVATE_TARGETS: flag,
   RELAY_ALLOWED_PORTS: z.string().default(""),
@@ -30,7 +34,10 @@ export interface Config {
   dsn: string;
   jwtSecret: Uint8Array;
   keyring: string;
-  valkeyUrl: string | undefined;
+  valkeyUrl: string;
+  login: { maxPerAccount: number; maxPerIp: number; lockSeconds: number };
+  /** Reverse proxies in front of the API whose X-Forwarded-For is believed (0: none). */
+  trustedProxyHops: number;
   publicUrl: string;
   host: string;
   port: number;
@@ -65,7 +72,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     dsn: e.RELAY_CONTROL_DSN,
     jwtSecret: new TextEncoder().encode(e.RELAY_JWT_SECRET),
     keyring,
-    valkeyUrl: e.RELAY_VALKEY_URL || undefined,
+    valkeyUrl: e.RELAY_VALKEY_URL,
+    login: {
+      maxPerAccount: e.RELAY_LOGIN_MAX_FAILURES_PER_ACCOUNT,
+      maxPerIp: e.RELAY_LOGIN_MAX_FAILURES_PER_IP,
+      lockSeconds: e.RELAY_LOGIN_LOCK_SECONDS,
+    },
+    trustedProxyHops: e.RELAY_TRUSTED_PROXY_HOPS,
     publicUrl: e.RELAY_PUBLIC_URL.replace(/\/$/, ""),
     host: e.RELAY_CONTROL_HOST,
     port: e.RELAY_CONTROL_PORT,
