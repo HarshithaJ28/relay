@@ -20,7 +20,7 @@ from datetime import timedelta
 
 import psycopg
 
-from . import api_keys, processes
+from . import api_keys, observability, processes
 from .destination import DestinationPolicy
 from .endpoint_secrets import Keyring
 from .settings import Settings
@@ -37,11 +37,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--scope", action="append", choices=api_keys.SCOPES, help="create-api-key: repeatable")
     args = parser.parse_args(argv)
 
-    logging.basicConfig(
-        level=os.environ.get("RELAY_LOG_LEVEL", "INFO").upper(),
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-        stream=sys.stderr,
-    )
+    observability.setup_logging(os.environ.get("RELAY_LOG_LEVEL", "INFO"))
+    observability.setup_tracing(args.role)
     log = logging.getLogger("relay")
     try:
         settings = Settings.from_env(needs_broker=args.role not in NO_BROKER)
@@ -78,10 +75,22 @@ def main(argv: list[str] | None = None) -> int:
         for sig in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(sig, on_signal, sig)
         processes._log_config(args.role, settings)
-        if args.role == "worker":
-            await processes.run_worker(settings, stop, keyring, policy)
-        else:
-            await getattr(processes, f"run_{args.role}")(settings, stop)
+        ops = (
+            observability.OpsServer(processes.HEALTH, settings.metrics_port)
+            if settings.metrics_port
+            else contextlib.nullcontext()
+        )
+        try:
+            await ops.__aenter__()
+        except OSError as e:  # the port is taken: a configuration problem, not a crash
+            raise ValueError(f"cannot serve metrics on port {settings.metrics_port}: {e.strerror}") from None
+        try:
+            if args.role == "worker":
+                await processes.run_worker(settings, stop, keyring, policy)
+            else:
+                await getattr(processes, f"run_{args.role}")(settings, stop)
+        finally:
+            await ops.__aexit__(None, None, None)
         log.info("%s stopped", args.role)
 
     try:
@@ -106,7 +115,16 @@ def run_ingest(settings: Settings, log) -> int:
         check=AsyncConnectionPool.check_connection,
         open=False,
     )
-    app = create_app(pool, timedelta(hours=settings.idempotency_window_hours))
+    limiter = None
+    if settings.valkey_url:
+        import valkey.asyncio
+
+        from .ratelimit import RateLimiter
+
+        limiter = RateLimiter(
+            valkey.asyncio.Valkey.from_url(settings.valkey_url, socket_timeout=1, socket_connect_timeout=1)
+        )
+    app = create_app(pool, timedelta(hours=settings.idempotency_window_hours), limiter, settings.api_key_cache_seconds)
 
     processes._log_config("ingest", settings)
     config = uvicorn.Config(

@@ -42,6 +42,10 @@ class DeliveryMachine(RuleBasedStateMachine):
             "VALUES (%s, %s, 'https://example.invalid', %s)",
             (self.endpoint, self.tenant, Jsonb([new_entry(TEST_KEYRING, str(self.endpoint), "s1", TEST_SECRET)])),
         )
+        # This model covers the delivery state machine, not capacity (tests/db/test_bounded_dispatch.py),
+        # so the limits are set high enough never to hold a delivery back.
+        self.su.execute("UPDATE control.endpoints SET concurrency_limit = 1000 WHERE id = %s", (self.endpoint,))
+        self.su.execute("UPDATE control.tenants SET dispatch_cap = 100000 WHERE id = %s", (self.tenant,))
         self.sched = self.connect("relay_scheduler")
         self.worker = self.connect("relay_worker")
         self.reaper = self.connect("relay_reaper")

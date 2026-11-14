@@ -47,21 +47,21 @@ def test_ack_happens_only_after_the_outcome_is_recorded(pg_dsn, connect, factory
     assert msg.calls == [("ack", "succeeded")]  # at ack time the database already said succeeded
 
 
-def test_a_failure_rejects_without_requeue_and_never_acks(pg_dsn, connect, factory):
+def test_a_failure_is_requeued_and_never_acked(pg_dsn, connect, factory):
     d = factory.delivery()
     msg = FakeMessage(queue_message(connect, factory, d))
     pool = OnePool(f"{pg_dsn} user=relay_worker", fail=True)
     asyncio.run(process_message(msg, pool, ScriptedSender(), TEST_KEYRING, WorkerConfig()))
-    assert msg.calls == [("reject", False)]
+    assert msg.calls == [("reject", True)]  # retried; the queue's delivery limit dead-letters a poison message
     assert factory.row(d)["status"] == "queued"  # untouched; the reaper's queue timeout takes it from here
 
 
-def test_a_malformed_message_is_acked_and_dropped(pg_dsn):
+def test_a_malformed_message_goes_to_the_dead_letter_queue(pg_dsn):
     for body in (b"not json", b"{}", b'{"delivery_id": "x", "dispatch_seq": 1, "dispatch_token": "zz"}'):
         msg = FakeMessage(body)
         sender = ScriptedSender()
         asyncio.run(process_message(msg, OnePool(pg_dsn, fail=True), sender, TEST_KEYRING, WorkerConfig()))
-        assert msg.calls == [("ack", None)] and sender.calls == []
+        assert msg.calls == [("reject", False)] and sender.calls == []
 
 
 def test_one_scheduler_pass_serves_every_tenant_with_due_work(pg_dsn, factory):
@@ -77,3 +77,43 @@ def test_one_scheduler_pass_serves_every_tenant_with_due_work(pg_dsn, factory):
     first, second = asyncio.run(go())
     assert first == (6, 3)
     assert second == (0, 0)
+
+
+# ---------------------------------------------------------------- dead-letter queue, against real RabbitMQ
+
+
+def test_dead_letter_queue_receives_malformed_and_poison_messages(pg_dsn, rabbit_url):
+    import uuid
+
+    import aio_pika
+
+    from relay_dataplane.publisher import declare, dlq_name
+
+    name = f"relay.test.{uuid.uuid4().hex[:8]}"
+    poison = b'{"delivery_id": "00000000-0000-0000-0000-000000000001", "dispatch_seq": 1, "dispatch_token": "00"}'
+
+    async def go():
+        conn = await aio_pika.connect_robust(rabbit_url)
+        async with conn:
+            ch = await conn.channel()
+            q = await declare(ch, name, delivery_limit=2)
+            for body in (b"not json", poison):
+                await ch.default_exchange.publish(aio_pika.Message(body), routing_key=name)
+            deliveries = 0
+            broken = OnePool(pg_dsn, fail=True)  # every attempt to handle the poison message fails
+            while deliveries < 10 and (m := await q.get(fail=False, timeout=5)) is not None:
+                deliveries += 1  # bounded: without a delivery limit the poison message would loop forever
+                await process_message(m, broken, ScriptedSender(), TEST_KEYRING, WorkerConfig())
+                await asyncio.sleep(0.2)
+            dlq = await ch.declare_queue(dlq_name(name), passive=True)
+            dead = []
+            while (m := await dlq.get(fail=False, timeout=5)) is not None:
+                dead.append(m.body)
+                await m.ack()
+            await ch.queue_delete(name)
+            await ch.queue_delete(dlq_name(name))
+            return deliveries, dead
+
+    deliveries, dead = asyncio.run(go())
+    assert sorted(dead) == sorted([b"not json", poison])  # nothing is lost, nothing loops forever
+    assert deliveries == 1 + 3  # malformed once; poison first delivery plus 2 redeliveries, then dead-lettered

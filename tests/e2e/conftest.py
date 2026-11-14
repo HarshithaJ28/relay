@@ -15,6 +15,7 @@ import aio_pika
 import pytest
 import trustme
 
+from relay_dataplane.publisher import dlq_name
 from tests.conftest import ROOT, TEST_KEYRING, TEST_SECRET
 from tests.e2e.chaos import ChaosReceiver
 
@@ -38,6 +39,14 @@ def receiver(tls):
     r.stop()
 
 
+def free_port() -> int:
+    import socket
+
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
 class Fleet:
     """Starts data-plane processes as real subprocesses and tears them down."""
 
@@ -51,6 +60,7 @@ class Fleet:
         )
         self.queue = f"relay.e2e.{uuid.uuid4().hex[:8]}"
         self.procs: list[tuple[str, subprocess.Popen, object]] = []
+        self.metrics_ports: list[int] = []  # one per started process, in start order
 
     def env(self, role: str) -> dict[str, str]:
         key_id, key = next(iter(TEST_KEYRING.keys.items()))
@@ -79,9 +89,11 @@ class Fleet:
 
     def start(self, role: str, **extra) -> subprocess.Popen:
         log = open(self.logdir / f"{role}-{len(self.procs)}.log", "w")
+        port = free_port()
+        self.metrics_ports.append(port)
         p = subprocess.Popen(
             [sys.executable, "-m", "relay_dataplane", role],
-            env=self.env(role) | extra,
+            env=self.env(role) | {"RELAY_METRICS_PORT": str(port)} | extra,
             stdout=log,
             stderr=subprocess.STDOUT,
         )
@@ -94,11 +106,15 @@ class Fleet:
         for _ in range(workers):
             self.start("worker")
 
-    def logs(self) -> str:
+    def logs(self, limit: int | None = 3000) -> str:
+        """Each process's output (the last `limit` characters of each; None for all of it)."""
         out = []
         for role, p, log in self.procs:
-            log.flush()
-            out.append(f"----- {role} pid={p.pid} rc={p.poll()}\n{open(log.name).read()[-3000:]}")
+            if not log.closed:
+                log.flush()
+            with open(log.name) as f:
+                text = f.read()
+            out.append(f"----- {role} pid={p.pid} rc={p.poll()}\n{text if limit is None else text[-limit:]}")
         return "\n".join(out)
 
     def stop_all(self, timeout: float = 15) -> dict[str, int]:
@@ -128,6 +144,7 @@ def fleet(pg_dsn, rabbit_url, receiver, tls, tmp_path):
         async with conn:
             ch = await conn.channel()
             await ch.queue_delete(f.queue)
+            await ch.queue_delete(dlq_name(f.queue))
 
     asyncio.run(drop())
 

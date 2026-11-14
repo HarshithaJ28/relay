@@ -26,8 +26,33 @@ def _crash(point: str) -> None:
         os._exit(137)  # abrupt death: no cleanup, no commit, like SIGKILL
 
 
-async def declare(channel: aio_pika.abc.AbstractChannel, name: str = QUEUE):
-    return await channel.declare_queue(name, durable=True, arguments={"x-queue-type": "quorum"})
+DELIVERY_LIMIT = int(os.environ.get("RELAY_DELIVERY_LIMIT", "5"))
+
+
+def dlq_name(queue: str) -> str:
+    """The dead-letter queue for a dispatch queue: relay.dlq for the default relay.deliveries."""
+    return "relay.dlq" if queue == "relay.deliveries" else f"{queue}.dlq"
+
+
+async def declare(channel: aio_pika.abc.AbstractChannel, name: str = QUEUE, delivery_limit: int = DELIVERY_LIMIT):
+    """Declare the dispatch queue and its dead-letter queue (both quorum queues).
+
+    A message the worker rejects without requeue (malformed), or one redelivered more than
+    `delivery_limit` times (a poison message), moves to the dead-letter queue. Business
+    failures never go there: a delivery's own "dead" state lives in PostgreSQL.
+    Queue arguments are fixed at creation; changing them needs a new queue.
+    """
+    await channel.declare_queue(dlq_name(name), durable=True, arguments={"x-queue-type": "quorum"})
+    return await channel.declare_queue(
+        name,
+        durable=True,
+        arguments={
+            "x-queue-type": "quorum",
+            "x-delivery-limit": delivery_limit,
+            "x-dead-letter-exchange": "",
+            "x-dead-letter-routing-key": dlq_name(name),
+        },
+    )
 
 
 def encode(delivery_id, dispatch_seq: int, token: bytes) -> bytes:

@@ -80,26 +80,41 @@ def test_public_has_no_execute_on_any_function(connect):
     assert rows == []
 
 
+# Every function in the delivery schema, and the plain role that owns it. The state-machine
+# functions belong to relay_claims; the maintenance functions run DDL and belong to relay_owner.
+FUNCTION_OWNERS = {
+    "check_lease": "relay_claims",
+    "claim_delivery": "relay_claims",
+    "defer_delivery": "relay_claims",
+    "dispatch_batch": "relay_claims",
+    "due_tenants": "relay_claims",
+    "open_breaker": "relay_claims",
+    "reclaim_expired": "relay_claims",
+    "record_attempt": "relay_claims",
+    "replay_delivery": "relay_claims",
+    "requeue_stale": "relay_claims",
+    "attempt_tenant": "relay_owner",
+    "drop_expired_event_partitions": "relay_owner",
+    "ensure_event_partitions": "relay_owner",
+    "orphan_report": "relay_owner",
+}
+
+
 def test_functions_are_hardened(connect):
     with connect() as c:
         rows = c.execute(
             "SELECT p.proname, p.prosecdef, pg_get_userbyid(p.proowner), p.proconfig "
             "FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'delivery'"
         ).fetchall()
-    assert sorted(r[0] for r in rows) == [
-        "check_lease",
-        "claim_delivery",
-        "defer_delivery",
-        "dispatch_batch",
-        "due_tenants",
-        "reclaim_expired",
-        "record_attempt",
-        "requeue_stale",
-    ]
-    for name, secdef, owner, cfg in rows:
+        bypass = c.execute(
+            "SELECT rolname FROM pg_roles WHERE rolname IN ('relay_claims', 'relay_owner') "
+            "AND (rolsuper OR rolbypassrls)"
+        ).fetchall()
+    assert {r[0]: r[2] for r in rows} == FUNCTION_OWNERS
+    for name, secdef, _owner, cfg in rows:
         assert secdef, name
-        assert owner == "relay_claims", name
         assert cfg and any(x.startswith("search_path=pg_catalog") for x in cfg), name
+    assert bypass == []
 
 
 @pytest.mark.parametrize(

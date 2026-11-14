@@ -341,3 +341,18 @@ def test_documented_body_schema_matches_the_model():
     assert set(model["properties"]) == set(EVENT_IN_SCHEMA["properties"])
     assert model["properties"]["event_type"]["pattern"] == EVENT_IN_SCHEMA["properties"]["event_type"]["pattern"]
     assert model.get("additionalProperties") is False
+
+
+def test_responses_are_counted_by_route_template_and_status(api, tenant):
+    async def go(c):
+        await c.post(EVENTS, json=BODY, headers=auth(tenant.key))
+        await c.post(EVENTS, json=BODY, headers={"Content-Type": "application/json"})
+        await c.get(f"{EVENTS}/00000000-0000-0000-0000-000000000000", headers=auth(tenant.key))
+        await c.get("/healthz")
+        return (await c.get("/metrics")).text
+
+    metrics = api(go)
+    assert 'relay_ingest_requests_total{route="/ingest/v1/events",status="202"}' in metrics
+    assert 'relay_ingest_requests_total{route="/ingest/v1/events",status="401"}' in metrics
+    assert 'relay_ingest_requests_total{route="/ingest/v1/events/{event_id}",status="404"}' in metrics
+    assert "00000000-0000" not in metrics and 'route="/healthz"' not in metrics  # no ids, no probe noise

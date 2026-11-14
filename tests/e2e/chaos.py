@@ -7,6 +7,7 @@ Behaviour is chosen by URL path, so one receiver serves every scenario:
   /retry-after        429 with Retry-After: 1 for the first request of a message, then 200
   /always/<code>      that status, every time
   /hold/<seconds>     signals `arrived`, waits, then 200 (lets a test act mid-send)
+  /down-until/<epoch> 503 until that Unix time, then 200 (an outage that ends)
 Every request's Standard Webhooks signature is verified and recorded.
 """
 
@@ -106,6 +107,8 @@ class ChaosReceiver:
             return web.Response(status=429, headers={"Retry-After": "1"}) if nth == 1 else web.Response(status=200)
         if kind == "always":
             return web.Response(status=int(parts[1]))
+        if kind == "down-until":
+            return web.Response(status=503 if time.time() < float(parts[1]) else 200)
         if kind == "hold":
             self.arrived.set()
             await asyncio.sleep(float(parts[1]))

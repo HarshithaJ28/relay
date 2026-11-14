@@ -13,7 +13,7 @@ import aio_pika
 import pytest
 
 from relay_dataplane.claim import claim_from_message
-from relay_dataplane.publisher import declare
+from relay_dataplane.publisher import declare, dlq_name
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -62,6 +62,7 @@ def queue(rabbit_url):
         async with conn:
             ch = await conn.channel()
             await ch.queue_delete(name)
+            await ch.queue_delete(dlq_name(name))
 
     asyncio.run(rm())
 

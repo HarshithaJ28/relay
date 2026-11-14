@@ -28,12 +28,15 @@ import psycopg
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.openapi.utils import get_openapi
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
+from prometheus_client import CONTENT_TYPE_LATEST
 from psycopg_pool import AsyncConnectionPool, PoolTimeout
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import api_keys
+from . import observability as obs
+from .ratelimit import RateLimiter
 
 log = logging.getLogger("relay.ingest")
 
@@ -106,6 +109,11 @@ ERRORS = {
     413: {"model": Problem, "description": "Body larger than 256 KB"},
     415: {"model": Problem, "description": "Body is not application/json"},
     422: {"model": Problem, "description": "Invalid event, unknown event type, or idempotency key reused"},
+    429: {
+        "model": Problem,
+        "description": "Over the tenant's ingestion rate; retry after the Retry-After seconds",
+        "headers": {"Retry-After": {"schema": {"type": "integer", "minimum": 1}}},
+    },
     503: {"model": Problem, "description": "Database unavailable"},
 }
 
@@ -152,7 +160,14 @@ class LimitBody:
 # ---------------------------------------------------------------- app
 
 
-def create_app(pool: AsyncConnectionPool, idempotency_window: timedelta = timedelta(hours=24)):
+def create_app(
+    pool: AsyncConnectionPool,
+    idempotency_window: timedelta = timedelta(hours=24),
+    limiter: RateLimiter | None = None,
+    key_cache_ttl: float = 30.0,
+):
+    key_cache = KeyCache(key_cache_ttl)
+
     @contextlib.asynccontextmanager
     async def lifespan(_app):
         # the pool belongs to the event loop that serves requests, so it opens here
@@ -161,6 +176,8 @@ def create_app(pool: AsyncConnectionPool, idempotency_window: timedelta = timede
             yield
         finally:
             await pool.close()
+            if limiter is not None:
+                await limiter.aclose()
 
     app = FastAPI(
         lifespan=lifespan,
@@ -189,13 +206,18 @@ def create_app(pool: AsyncConnectionPool, idempotency_window: timedelta = timede
             return None, problem(
                 401, "unauthorized", "Missing or invalid API key", headers={"WWW-Authenticate": "Bearer"}
             )
-        cur = await conn.execute("SELECT * FROM control.authenticate_api_key(%s)", (api_keys.key_hash(key),))
-        row = await cur.fetchone()
-        if row is None:
-            return None, problem(
-                401, "unauthorized", "Missing or invalid API key", headers={"WWW-Authenticate": "Bearer"}
-            )
-        _, tenant_id, scopes = row
+        digest = api_keys.key_hash(key)
+        cached = key_cache.get(digest)
+        if cached is None:
+            cur = await conn.execute("SELECT * FROM control.authenticate_api_key(%s)", (digest,))
+            row = await cur.fetchone()
+            if row is None:  # unknown or revoked keys are never cached
+                return None, problem(
+                    401, "unauthorized", "Missing or invalid API key", headers={"WWW-Authenticate": "Bearer"}
+                )
+            cached = (row[1], tuple(row[2]))
+            key_cache.put(digest, cached)
+        tenant_id, scopes = cached
         if scope not in scopes:
             return None, problem(403, "forbidden", f"The API key lacks the {scope} scope")
         await conn.execute("SELECT set_config('app.tenant_id', %s, true)", (str(tenant_id),))
@@ -232,6 +254,19 @@ def create_app(pool: AsyncConnectionPool, idempotency_window: timedelta = timede
                 tenant_id, denied = await authenticate(conn, request, "events:write")
                 if denied:
                     return denied
+                if limiter is not None:
+                    cur = await conn.execute(
+                        "SELECT ingest_rate_per_sec, ingest_burst FROM control.tenants WHERE id = %s", (tenant_id,)
+                    )
+                    rate, burst = await cur.fetchone()
+                    verdict = await limiter.take(tenant_id, rate, burst)
+                    if not verdict.allowed:
+                        return problem(
+                            429,
+                            "rate-limited",
+                            "Too many events; slow down",
+                            headers={"Retry-After": str(verdict.retry_after)},
+                        )
                 idem = request.headers.get("idempotency-key")
                 if idem is not None and not IDEMPOTENCY_KEY.match(idem):
                     return problem(
@@ -307,6 +342,22 @@ def create_app(pool: AsyncConnectionPool, idempotency_window: timedelta = timede
 
     app.openapi = openapi
 
+    @app.middleware("http")
+    async def count_responses(request: Request, call_next):
+        with obs.tracer.start_as_current_span(f"relay.ingest {request.method}") as span:
+            response = await call_next(request)
+            route = request.scope.get("route")
+            template = getattr(route, "path", "unmatched")  # a template, so ids never become labels
+            span.set_attribute("http.route", template)
+            span.set_attribute("http.response.status_code", response.status_code)
+        if template not in ("/metrics", "/healthz", "/readyz"):
+            obs.INGEST_REQUESTS.labels(template, str(response.status_code)).inc()
+        return response
+
+    @app.get("/metrics", include_in_schema=False)
+    async def metrics():
+        return Response(obs.metrics_text(), media_type=CONTENT_TYPE_LATEST)
+
     @app.get("/healthz", include_in_schema=False)
     async def healthz():
         return {"status": "ok"}
@@ -327,6 +378,33 @@ def _first_error(errors) -> str:
     first = errors[0] if errors else {}
     where = ".".join(str(x) for x in first.get("loc", ()) if x != "body")
     return f"{where}: {first.get('msg', 'invalid')}".strip(": ")
+
+
+class KeyCache:
+    """Valid API keys (by SHA-256) to their tenant and scopes, for `ttl` seconds.
+
+    Saves a database round trip per request. The cost is that a revoked key keeps working
+    for up to `ttl` seconds in each API process. Bounded in size; ttl 0 disables it."""
+
+    def __init__(self, ttl: float, max_entries: int = 10_000, clock=time.monotonic):
+        self.ttl, self.max_entries, self._clock = ttl, max_entries, clock
+        self._entries: dict[bytes, tuple[float, tuple]] = {}
+
+    def get(self, digest: bytes):
+        hit = self._entries.get(digest)
+        if hit is None:
+            return None
+        if hit[0] <= self._clock():
+            del self._entries[digest]
+            return None
+        return hit[1]
+
+    def put(self, digest: bytes, value: tuple) -> None:
+        if self.ttl <= 0:
+            return
+        if len(self._entries) >= self.max_entries:  # drop the entry that expires first
+            del self._entries[min(self._entries, key=lambda k: self._entries[k][0])]
+        self._entries[digest] = (self._clock() + self.ttl, value)
 
 
 class _Rollback(Exception):

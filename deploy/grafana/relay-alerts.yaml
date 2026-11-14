@@ -1,0 +1,92 @@
+# Prometheus alerting rules for Relay. Load into Grafana Cloud (Alerting > Alert rules >
+# import, or mimirtool rules load) or any Prometheus-compatible ruler.
+#
+# Thresholds are starting points. The spec calls for tuning them from chaos-receiver
+# experiments, which have not been run yet.
+groups:
+  - name: relay-retention
+    rules:
+      - alert: RelayRetentionLagHigh
+        # Spec: alert at twice the cleanup interval (default 1 h).
+        expr: max(relay_retention_lag_seconds) > 7200
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: Expired data is not being deleted on time
+          description: The oldest expired row has been kept {{ $value | humanizeDuration }} past its expiry.
+      - alert: RelayRetentionBlockedEvents
+        expr: max(relay_retention_blocked_events) > 0
+        for: 1h
+        labels: {severity: warning}
+        annotations:
+          summary: Expired events are kept because deliveries are still active
+          description: "{{ $value }} events are past retention but still have active deliveries (an outage backlog?)."
+      - alert: RelayPartitionsNotDropped
+        expr: max(relay_partitions_skipped) > 0
+        for: 6h
+        labels: {severity: warning}
+        annotations:
+          summary: Expired event partitions cannot be dropped
+          description: Deliveries still refer to events in a partition older than the longest retention.
+      - alert: RelayOrphanRows
+        expr: max(relay_orphans) > 0
+        labels: {severity: critical}
+        annotations:
+          summary: The orphan report found rows that should not exist
+          description: A write path is broken; see the retention job's log for the counts by kind.
+
+  - name: relay-delivery
+    rules:
+      - alert: RelayDeadLetters
+        expr: max(relay_queue_messages{queue=~".*dlq"}) > 0
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: Messages are waiting in the dead-letter queue
+          description: Malformed or poison queue messages need inspection.
+      - alert: RelayHighFailureRate
+        expr: |
+          sum(rate(relay_attempts_total{outcome!="succeeded"}[10m]))
+            / sum(rate(relay_attempts_total[10m])) > 0.5
+          and sum(rate(relay_attempts_total[10m])) > 0.1
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: More than half of delivery attempts are failing
+          description: Failing attempts across all endpoints are {{ $value | humanizePercentage }} of the total.
+      - alert: RelayBreakersOpening
+        expr: sum(increase(relay_breaker_opened_total[15m])) > 10
+        labels: {severity: info}
+        annotations:
+          summary: Many circuit breakers opened recently
+          description: "{{ $value }} breaker openings in 15 minutes."
+      - alert: RelayQueueBacklog
+        expr: max(relay_queue_messages{queue!~".*dlq"}) > 5000
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: The dispatch queue is backing up
+          description: "{{ $value }} messages wait; workers may be too few or stuck."
+      - alert: RelayOutboxBacklog
+        expr: max(relay_outbox_unpublished) > 1000
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: The outbox is not being published
+          description: "{{ $value }} dispatched deliveries wait for the publisher."
+
+  - name: relay-processes
+    rules:
+      - alert: RelayProcessStalled
+        expr: time() - relay_loop_heartbeat_timestamp_seconds > 120
+        labels: {severity: critical}
+        annotations:
+          summary: A Relay process has stopped making progress
+          description: "{{ $labels.job }} on {{ $labels.instance }} has not run its main loop for {{ $value | humanizeDuration }}."
+      - alert: RelayIngestServerErrors
+        expr: sum(rate(relay_ingest_requests_total{status=~"5.."}[5m])) > 0
+        for: 5m
+        labels: {severity: critical}
+        annotations:
+          summary: The ingestion API is returning server errors
+          description: "{{ $value }} server errors per second."

@@ -8,12 +8,14 @@ from dataclasses import dataclass
 import httpx
 import psycopg
 import pytest
+import valkey.asyncio
 from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
 
 from relay_dataplane import api_keys
 from relay_dataplane.endpoint_secrets import new_entry
 from relay_dataplane.ingest import create_app
+from relay_dataplane.ratelimit import RateLimiter
 from tests.conftest import TEST_KEYRING, TEST_SECRET
 
 
@@ -82,19 +84,24 @@ def tenant(make_tenant):
 def api(pg_dsn):
     """api(fn, pool_size=4): run `await fn(client)` against the real app; returns its result."""
 
-    def run(fn, pool_size=4, window=None):
+    def run(fn, pool_size=4, window=None, valkey_url=None, key_cache_ttl=30.0):
         async def go():
             pool = AsyncConnectionPool(
                 f"{pg_dsn} user=relay_tenant", min_size=1, max_size=pool_size, kwargs={"autocommit": True}, open=False
             )
             await pool.open()
+            limiter = RateLimiter(valkey.asyncio.Valkey.from_url(valkey_url)) if valkey_url else None
             try:
-                app = create_app(pool) if window is None else create_app(pool, window)
+                kwargs = {"limiter": limiter, "key_cache_ttl": key_cache_ttl}
+                kwargs |= {"idempotency_window": window} if window is not None else {}
+                app = create_app(pool, **kwargs)
                 transport = httpx.ASGITransport(app=app)
                 async with httpx.AsyncClient(transport=transport, base_url="http://relay.test") as client:
                     return await fn(client)
             finally:
                 await pool.close()
+                if limiter is not None:
+                    await limiter.aclose()
 
         return asyncio.run(go())
 

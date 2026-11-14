@@ -7,10 +7,11 @@ a killed process loses at most work that the reaper hands out again.
 
 Worker acknowledgement rule: a message is acked only after handle_message has
 returned, which means the database has recorded the outcome (or the message was
-a duplicate). If handling fails unexpectedly the message is rejected without
-requeue, so one bad message cannot loop through the queue; the delivery is not
-lost, because the reaper requeues queued deliveries whose message is never
-claimed (requeue_stale) and reclaims claimed ones whose lease expires.
+a duplicate). If handling fails unexpectedly the message is requeued; the queue's
+delivery limit dead-letters one that keeps failing, so a poison message cannot
+loop forever. A malformed message goes straight to the dead-letter queue. The
+delivery is never lost either way: the reaper requeues queued deliveries whose
+message is never claimed (requeue_stale) and reclaims claimed ones whose lease expires.
 """
 
 import asyncio
@@ -18,19 +19,25 @@ import contextlib
 import json
 import logging
 import random
+import time
 from datetime import timedelta
 
 import aio_pika
+import aiormq.exceptions
 import psycopg
 import psycopg_pool
+import valkey.asyncio
 from psycopg_pool import AsyncConnectionPool
 
+from . import observability as obs
 from . import retention
+from .breaker import BreakerConfig, CircuitBreaker
 from .claim import parse_message
 from .destination import DestinationPolicy
 from .endpoint_secrets import Keyring
 from .http_sender import HttpSender
-from .publisher import declare, publish_some
+from .live import LivePublisher
+from .publisher import declare, dlq_name, publish_some
 from .settings import Settings
 from .transform import TransformClient
 from .worker import WorkerConfig, handle_message
@@ -38,6 +45,11 @@ from .worker import WorkerConfig, handle_message
 log = logging.getLogger("relay")
 
 MAX_BACKOFF = 30.0
+HEALTH = obs.Health()  # one per process: the main loop beats it, connections set readiness
+
+# Everything a broker call can raise when the broker or the channel goes away. aio-pika
+# reports a closed channel as ChannelInvalidStateError, a RuntimeError, not an AMQPError.
+BROKER_ERRORS = (aio_pika.exceptions.AMQPError, aiormq.exceptions.ChannelInvalidStateError)
 
 
 async def wait_or_stop(stop: asyncio.Event, seconds: float) -> bool:
@@ -85,17 +97,21 @@ async def run_scheduler(s: Settings, stop: asyncio.Event) -> None:
         try:
             async with await psycopg.AsyncConnection.connect(s.dsn, autocommit=True) as db:
                 retry.reset()
+                HEALTH.ready = True
                 # Ingestion sends NOTIFY relay_dispatch on commit. Waking on it lowers latency;
                 # polling every tick remains the guarantee (a notification can be missed).
                 await db.execute("LISTEN relay_dispatch")
                 while not stop.is_set():
+                    HEALTH.beat()
                     dispatched, tenants = await dispatch_pass(db, s)
+                    obs.DISPATCHED.inc(dispatched)
                     if dispatched:
                         log.info("scheduler dispatched=%d tenants=%d", dispatched, tenants)
                     else:
                         async for _ in db.notifies(timeout=s.scheduler_tick, stop_after=1):
                             pass
         except (psycopg.OperationalError, OSError) as e:
+            HEALTH.ready = False
             log.warning("scheduler database error, reconnecting: %s", type(e).__name__)
             await wait_or_stop(stop, retry.next())
 
@@ -111,16 +127,21 @@ async def run_reaper(s: Settings, stop: asyncio.Event) -> None:
         try:
             async with await psycopg.AsyncConnection.connect(s.dsn, autocommit=True) as db:
                 retry.reset()
+                HEALTH.ready = True
                 while not stop.is_set():
                     cur = await db.execute("SELECT delivery.reclaim_expired(%s)", (s.reap_batch,))
+                    HEALTH.beat()
                     reclaimed = (await cur.fetchone())[0]
+                    obs.RECLAIMED.inc(reclaimed)
                     cur = await db.execute("SELECT delivery.requeue_stale(%s, %s)", (queue_timeout, s.reap_batch))
                     requeued = (await cur.fetchone())[0]
+                    obs.REQUEUED.inc(requeued)
                     if reclaimed or requeued:
                         log.info("reaper reclaimed=%d requeued=%d", reclaimed, requeued)
                     if reclaimed < s.reap_batch and requeued < s.reap_batch:
                         await wait_or_stop(stop, s.reaper_interval)
         except (psycopg.OperationalError, OSError) as e:
+            HEALTH.ready = False
             log.warning("reaper database error, reconnecting: %s", type(e).__name__)
             await wait_or_stop(stop, retry.next())
 
@@ -138,21 +159,42 @@ async def run_retention(s: Settings, stop: asyncio.Event) -> None:
         try:
             async with await psycopg.AsyncConnection.connect(s.dsn, autocommit=True) as db:
                 retry.reset()
+                HEALTH.ready = True
+                last_orphan_check = 0.0
                 while not stop.is_set():
+                    HEALTH.beat()
+                    await retention.flush_usage(db)  # before anything is deleted
                     r = await retention.run_pass(db, margin, s.retention_batch)
+                    await retention.maintain_partitions(db, r)
+                    if time.monotonic() - last_orphan_check >= s.orphan_interval:
+                        r.orphans = await retention.orphan_report(db)
+                        last_orphan_check = time.monotonic()
                     log.info(
-                        "retention expired=%d attempts=%d deliveries=%d events=%d keys=%d "
+                        "retention expired=%d attempts=%d deliveries=%d events=%d keys=%d outbox=%d "
+                        "partitions_created=%d partitions_dropped=%s "
                         "relay_retention_blocked_events=%d relay_retention_lag_seconds=%.0f",
                         r.expired,
                         r.attempts_deleted,
                         r.deliveries_deleted,
                         r.events_deleted,
                         r.keys_deleted,
+                        r.outbox_deleted,
+                        r.partitions_created,
+                        r.partitions_dropped,
                         r.blocked_events,
                         r.lag_seconds,
                     )
+                    record_retention_metrics(r)
+                    if r.partitions_skipped:
+                        log.warning(
+                            "retention could not drop expired partitions %s: deliveries still refer to them",
+                            r.partitions_skipped,
+                        )
+                    if r.orphans and any(r.orphans.values()):
+                        log.warning("orphan report found rows that should not exist: %s", r.orphans)
                     await wait_or_stop(stop, s.retention_interval)
         except (psycopg.OperationalError, OSError) as e:
+            HEALTH.ready = False
             log.warning("retention database error, reconnecting: %s", type(e).__name__)
             await wait_or_stop(stop, retry.next())
 
@@ -163,6 +205,7 @@ async def run_retention(s: Settings, stop: asyncio.Event) -> None:
 async def run_publisher(s: Settings, stop: asyncio.Event) -> None:
     """Publish outbox rows with confirms; mark them only after the broker confirms (AC-1)."""
     retry = Backoff()
+    backlog_sampled = 0.0
     while not stop.is_set():
         try:
             connection = await aio_pika.connect_robust(s.amqp_url)
@@ -171,13 +214,25 @@ async def run_publisher(s: Settings, stop: asyncio.Event) -> None:
                 await declare(channel, s.queue)
                 with psycopg.connect(s.dsn, autocommit=False) as db:
                     retry.reset()
+                    HEALTH.ready = True
                     while not stop.is_set():
+                        HEALTH.beat()
                         n = await publish_some(channel, db, s.queue, s.publish_batch)
+                        obs.PUBLISHED.inc(n)
+                        if time.monotonic() - backlog_sampled >= 10:
+                            obs.OUTBOX_UNPUBLISHED.set(
+                                db.execute(
+                                    "SELECT count(*) FROM delivery.outbox WHERE published_at IS NULL"
+                                ).fetchone()[0]
+                            )
+                            db.commit()
+                            backlog_sampled = time.monotonic()
                         if n:
                             log.info("publisher published=%d", n)
                         if n < s.publish_batch:
                             await wait_or_stop(stop, s.publisher_tick)
-        except (psycopg.OperationalError, aio_pika.exceptions.AMQPError, OSError) as e:
+        except (psycopg.OperationalError, *BROKER_ERRORS, OSError) as e:
+            HEALTH.ready = False
             log.warning("publisher error, reconnecting: %s", type(e).__name__)
             await wait_or_stop(stop, retry.next())
 
@@ -215,37 +270,44 @@ async def run_worker(
                 await pool.wait(timeout=30)
                 sender = sender_factory() if sender_factory else HttpSender(policy, max_connections=s.concurrency)
                 transformer = TransformClient(s.transform_url, s.transform_timeout) if s.transform_url else None
+                breaker, live = make_breaker(s)
                 async with sender, transformer or contextlib.nullcontext():
                     connection = await aio_pika.connect_robust(s.amqp_url)  # reconnects and re-consumes itself
                     async with connection:
                         retry.reset()
-                        await _consume(s, stop, connection, pool, sender, keyring, config, transformer)
-        except (psycopg.OperationalError, psycopg_pool.PoolTimeout, aio_pika.exceptions.AMQPError, OSError) as e:
+                        HEALTH.ready = True
+                        await _consume(s, stop, connection, pool, sender, keyring, config, transformer, breaker, live)
+        except (psycopg.OperationalError, psycopg_pool.PoolTimeout, *BROKER_ERRORS, OSError) as e:
+            HEALTH.ready = False
             log.warning("worker error, reconnecting: %s", type(e).__name__)
             await wait_or_stop(stop, retry.next())
 
 
-async def process_message(message, pool, sender, keyring: Keyring, config: WorkerConfig, transformer=None) -> None:
+async def process_message(
+    message, pool, sender, keyring: Keyring, config: WorkerConfig, transformer=None, breaker=None, live=None
+) -> None:
     """Handle one queue message. Ack only after the database holds the outcome."""
     try:
         parse_message(message.body)
     except (ValueError, KeyError, TypeError):
-        log.warning("worker dropped a malformed message")
-        await message.ack()  # can never be valid; nothing in the database refers to it
+        log.warning("worker dead-lettered a malformed message")
+        await _settle(message.reject(requeue=False))  # can never be valid: to the dead-letter queue
         return
     try:
         async with pool.connection() as db:
-            handled = await handle_message(db, message.body, sender, keyring, config, transformer=transformer)
+            handled = await handle_message(
+                db, message.body, sender, keyring, config, transformer=transformer, breaker=breaker, live=live
+            )
     except Exception as e:
         log.error("worker failed to handle a message: %s", type(e).__name__)
-        await message.reject(requeue=False)  # the reaper hands the delivery out again
+        # Try again (another worker, or after the database recovers). A message that keeps
+        # failing passes the queue's delivery limit and is dead-lettered; the delivery itself
+        # is still safe in PostgreSQL, where the reaper returns it to scheduled.
+        await _settle(message.reject(requeue=True))
         return
-    try:
-        await message.ack()  # only now: the database already holds the outcome
-    except aio_pika.exceptions.AMQPError:
-        # channel lost after the outcome was recorded: the broker redelivers, and the
-        # redelivered message is a duplicate that claim_delivery rejects
-        log.warning("worker could not ack (channel closed)")
+    # Only now: the database already holds the outcome. If the channel is gone the broker
+    # redelivers the message, and the redelivered copy is a duplicate that the claim rejects.
+    await _settle(message.ack())
     log.info(
         "worker delivery=%s result=%s attempt=%s error=%s",
         handled.delivery_id,
@@ -255,7 +317,47 @@ async def process_message(message, pool, sender, keyring: Keyring, config: Worke
     )
 
 
-async def _consume(s, stop, connection, pool: AsyncConnectionPool, sender, keyring, config, transformer) -> None:
+async def _sample_queues(channel, name: str, every: float = 15.0) -> None:
+    """Heartbeat for the worker, and how many messages wait in its queue and dead-letter queue."""
+    while True:
+        HEALTH.beat()
+        for queue in (name, dlq_name(name)):
+            try:
+                declared = await channel.declare_queue(queue, passive=True)
+                obs.QUEUE_MESSAGES.labels(queue).set(declared.declaration_result.message_count)
+            except BROKER_ERRORS:
+                pass
+        await asyncio.sleep(every)
+
+
+def record_retention_metrics(r) -> None:
+    obs.RETENTION_BLOCKED.set(r.blocked_events)
+    obs.RETENTION_LAG.set(r.lag_seconds)
+    obs.PARTITIONS_SKIPPED.set(len(r.partitions_skipped))
+    for kind, n in (
+        ("attempts", r.attempts_deleted),
+        ("deliveries", r.deliveries_deleted),
+        ("events", r.events_deleted),
+        ("idempotency_keys", r.keys_deleted),
+        ("outbox", r.outbox_deleted),
+        ("expired_to_dead", r.expired),
+    ):
+        obs.RETENTION_DELETED.labels(kind).inc(n)
+    for kind, n in (r.orphans or {}).items():
+        obs.ORPHANS.labels(kind).set(n)
+
+
+async def _settle(call) -> None:
+    """Ack or reject; a channel that closed meanwhile is not an error (the broker redelivers)."""
+    try:
+        await call
+    except BROKER_ERRORS:
+        log.warning("worker could not settle a message (channel closed); the broker will redeliver it")
+
+
+async def _consume(
+    s, stop, connection, pool: AsyncConnectionPool, sender, keyring, config, transformer, breaker, live
+) -> None:
     channel = await connection.channel()
     await channel.set_qos(prefetch_count=s.concurrency)
     queue = await declare(channel, s.queue)
@@ -265,13 +367,15 @@ async def _consume(s, stop, connection, pool: AsyncConnectionPool, sender, keyri
         task = asyncio.current_task()
         in_flight.add(task)
         try:
-            await process_message(message, pool, sender, keyring, config, transformer)
+            await process_message(message, pool, sender, keyring, config, transformer, breaker, live)
         finally:
             in_flight.discard(task)
 
     tag = await queue.consume(on_message, no_ack=False)
+    sampler = asyncio.ensure_future(_sample_queues(channel, s.queue))
     log.info("worker consuming queue=%s concurrency=%d", s.queue, s.concurrency)
     await stop.wait()
+    sampler.cancel()
 
     # Graceful shutdown: stop taking messages, let sends in progress finish and be recorded.
     with contextlib.suppress(Exception):
@@ -283,6 +387,25 @@ async def _consume(s, stop, connection, pool: AsyncConnectionPool, sender, keyri
             task.cancel()
 
 
+def make_breaker(s: Settings) -> tuple[CircuitBreaker | None, LivePublisher | None]:
+    """The circuit breaker and live updates; both need Valkey and are off without it."""
+    if not s.valkey_url:
+        return None, None
+    client = valkey.asyncio.Valkey.from_url(s.valkey_url, socket_timeout=1, socket_connect_timeout=1)
+    breaker = CircuitBreaker(
+        client,
+        BreakerConfig(
+            window=s.breaker_window,
+            bucket=max(s.breaker_window / 12, 0.1),
+            min_volume=s.breaker_min_volume,
+            threshold=s.breaker_threshold,
+            base_cooldown=s.breaker_cooldown,
+            max_cooldown=max(s.breaker_max_cooldown, s.breaker_cooldown),
+        ),
+    )
+    return breaker, LivePublisher(client)
+
+
 def _log_config(name: str, s: Settings) -> None:
-    safe = {k: v for k, v in vars(s).items() if k not in ("dsn", "amqp_url")}
+    safe = {k: v for k, v in vars(s).items() if k not in ("dsn", "amqp_url", "valkey_url")}
     log.info("%s starting %s", name, json.dumps(safe, sort_keys=True))

@@ -22,9 +22,10 @@ COPY services/data-plane/relay_dataplane /app/relay_dataplane
 WORKDIR /app
 USER 10001
 # One image, six processes: worker (default), scheduler, reaper, publisher, retention,
-# and ingest (the HTTP API on RELAY_INGEST_PORT, default 8080).
+# and ingest (the HTTP API on RELAY_INGEST_PORT, default 8080). Every other process serves
+# /metrics, /healthz and /readyz on RELAY_METRICS_PORT (default 9100).
 # Choose with the argument, e.g. `docker run IMAGE python -m relay_dataplane scheduler`.
 # SIGTERM shuts each one down gracefully. Settings: see relay_dataplane/settings.py.
-EXPOSE 8080
+EXPOSE 8080 9100
 STOPSIGNAL SIGTERM
 CMD ["python", "-m", "relay_dataplane", "worker"]

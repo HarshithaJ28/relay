@@ -50,6 +50,11 @@ class Report:
     lag_seconds: float = 0.0
     tenants: int = 0
     per_tenant_blocked: dict = field(default_factory=dict)
+    outbox_deleted: int = 0
+    partitions_created: int = 0
+    partitions_dropped: list = field(default_factory=list)
+    partitions_skipped: list = field(default_factory=list)  # old enough, but deliveries still refer to them
+    orphans: dict | None = None  # only on passes that ran the orphan report
 
 
 async def _batched(conn: psycopg.AsyncConnection, sql: str, args: tuple, batch: int) -> int:
@@ -121,7 +126,71 @@ async def run_pass(conn: psycopg.AsyncConnection, margin: timedelta, batch: int 
             report.per_tenant_blocked[str(tenant_id)] = blocked
         report.blocked_events += blocked
         report.lag_seconds = max(report.lag_seconds, float(lag))
+
+    # An outbox row matters only while its dispatch is the delivery's current one: the publisher
+    # needs it until it is published, and requeue_stale reads it after. Once the dispatch is
+    # over, the row is useless (publishing it would only send a message the claim rejects), and
+    # deleting it also removes any raw token it still holds. Rows of deleted deliveries cascade.
+    report.outbox_deleted = await _batched(
+        conn,
+        "DELETE FROM delivery.outbox WHERE id IN (SELECT o.id FROM delivery.outbox o "
+        "JOIN delivery.deliveries d ON d.id = o.delivery_id "
+        "WHERE NOT (d.status = 'queued' AND d.dispatch_seq = o.dispatch_seq) "
+        "LIMIT %s)",
+        (),
+        batch,
+    )
     return report
+
+
+USAGE_DAYS = 3  # days of usage recomputed each pass; younger than any retention window (at least 2 days)
+
+
+async def flush_usage(conn: psycopg.AsyncConnection, days: int = USAGE_DAYS) -> int:
+    """Recompute control.usage_daily for the last `days` UTC days from the source rows.
+
+    Idempotent (a recount, not an increment), and run before anything is deleted, so the
+    totals are exact; the days it touches are always inside every tenant's retention window."""
+    cur = await conn.execute(
+        """
+        INSERT INTO control.usage_daily (tenant_id, day, events_ingested, attempts, successes)
+        SELECT tenant_id, day, sum(events), sum(attempts), sum(successes) FROM (
+            SELECT tenant_id, (created_at AT TIME ZONE 'UTC')::date AS day, count(*) AS events,
+                   0 AS attempts, 0 AS successes
+            FROM delivery.events WHERE created_at >= (now() AT TIME ZONE 'UTC')::date - %(days)s::int
+            GROUP BY 1, 2
+            UNION ALL
+            SELECT tenant_id, (created_at AT TIME ZONE 'UTC')::date, 0,
+                   count(*) FILTER (WHERE counted), count(*) FILTER (WHERE counted AND outcome = 'success')
+            FROM delivery.delivery_attempts
+            WHERE tenant_id IS NOT NULL AND created_at >= (now() AT TIME ZONE 'UTC')::date - %(days)s::int
+            GROUP BY 1, 2
+        ) x GROUP BY 1, 2
+        ON CONFLICT (tenant_id, day) DO UPDATE SET
+            events_ingested = excluded.events_ingested, attempts = excluded.attempts, successes = excluded.successes
+        """,
+        {"days": days - 1},
+    )
+    return cur.rowcount
+
+
+PARTITION_MONTHS_AHEAD = 3
+PARTITION_MARGIN = timedelta(days=7)  # kept past the longest tenant retention before a partition may go
+
+
+async def maintain_partitions(conn: psycopg.AsyncConnection, report: Report) -> None:
+    """Create upcoming monthly event partitions; drop fully expired ones that nothing refers to."""
+    cur = await conn.execute("SELECT delivery.ensure_event_partitions(%s)", (PARTITION_MONTHS_AHEAD,))
+    report.partitions_created = (await cur.fetchone())[0]
+    cur = await conn.execute("SELECT * FROM delivery.drop_expired_event_partitions(%s)", (PARTITION_MARGIN,))
+    for name, action in await cur.fetchall():
+        (report.partitions_dropped if action == "dropped" else report.partitions_skipped).append(name)
+
+
+async def orphan_report(conn: psycopg.AsyncConnection) -> dict:
+    """Rows that should not exist if every write path is correct. Reported, never repaired."""
+    cur = await conn.execute("SELECT * FROM delivery.orphan_report()")
+    return {kind: count for kind, count in await cur.fetchall()}
 
 
 async def check_retention_covers_retries(conn: psycopg.AsyncConnection, margin: timedelta) -> None:

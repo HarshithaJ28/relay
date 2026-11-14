@@ -2,7 +2,6 @@
 HTTP, and watch it reach the chaos receiver through scheduler, publisher and worker."""
 
 import json
-import socket
 import subprocess
 import sys
 import time
@@ -11,14 +10,8 @@ import httpx
 import psycopg
 import pytest
 
-from tests.e2e.conftest import HOST, Fleet, wait_for
+from tests.e2e.conftest import HOST, Fleet, free_port, wait_for
 from tests.ingest.conftest import add_endpoint, subscribe
-
-
-def free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
 
 
 @pytest.fixture

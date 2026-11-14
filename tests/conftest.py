@@ -16,6 +16,8 @@ Where the services come from (per service, chosen by environment variable):
   with a random name is created for the session and dropped at the end.
 - RELAY_TEST_AMQP_URL="amqp://guest:guest@127.0.0.1:5672/": use an
   already-running RabbitMQ (each test uses its own queue and deletes it).
+- RELAY_TEST_VALKEY_URL="valkey://127.0.0.1:6379/15": use an already-running Valkey.
+  The tests flush that database, so point it at one used for nothing else.
 
 If a service cannot be started or reached, the tests fail. They never skip.
 """
@@ -38,6 +40,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 MIGRATIONS = sorted((ROOT / "db" / "migrations").glob("*.sql"))
 PG_IMAGE = "postgres:16"
 RABBITMQ_IMAGE = "rabbitmq:3.13"
+VALKEY_IMAGE = "valkey/valkey:8.1"
 # Synthetic master key and signing secret for tests only.
 TEST_KEYRING = Keyring({"test-k1": bytes(range(32))}, "test-k1")
 TEST_SECRET = "whsec_" + "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="  # base64 of 0123456789abcdef x2
@@ -49,10 +52,11 @@ LOGIN_ROLES = [
     "relay_worker",
     "relay_reaper",
     "relay_retention",
+    "relay_control",
 ]
 DOCKER_HELP = (
-    "start Docker, or point the tests at running services with RELAY_TEST_PG_DSN "
-    "and RELAY_TEST_AMQP_URL (see tests/conftest.py)"
+    "start Docker, or point the tests at running services with RELAY_TEST_PG_DSN, "
+    "RELAY_TEST_AMQP_URL and RELAY_TEST_VALKEY_URL (see tests/conftest.py)"
 )
 
 
@@ -234,3 +238,32 @@ def rabbit_url():
     yield url
     if container is not None:
         _stop_container(container)
+
+
+# ---------------------------------------------------------------- Valkey (breaker and rate limits)
+
+
+@pytest.fixture(scope="session")
+def valkey_url():
+    import valkey
+
+    url = os.environ.get("RELAY_TEST_VALKEY_URL")
+    container = None
+    if not url:
+        container, host, port = _start_container(VALKEY_IMAGE, 6379, {})
+        url = f"valkey://{host}:{port}/0"
+    _wait_until("Valkey", lambda: valkey.Valkey.from_url(url, socket_timeout=2).ping())
+    yield url
+    if container is not None:
+        _stop_container(container)
+
+
+@pytest.fixture
+def valkey_clean(valkey_url):
+    """Each test starts with an empty Valkey database."""
+    import valkey
+
+    client = valkey.Valkey.from_url(valkey_url)
+    client.flushdb()
+    yield valkey_url
+    client.close()

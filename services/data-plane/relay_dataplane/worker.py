@@ -18,12 +18,21 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 import psycopg
+from opentelemetry import trace
 
 from . import backoff, signing
+from . import observability as obs
+from .breaker import CircuitBreaker, counts_as_failure
 from .claim import CLAIM_SQL, parse_message
 from .endpoint_secrets import Keyring, SecretUnavailable, active_secrets
+from .live import LivePublisher
 from .outcome import Sender, SendResult, classify
 from .transform import TransformClient, TransformResult
+
+
+def new_lease_token() -> bytes:
+    """128 random bits. Only its SHA-256 is stored; the token itself lives only in this call."""
+    return os.urandom(16)
 
 
 @dataclass(frozen=True)
@@ -63,17 +72,57 @@ async def handle_message(
     rng: Callable[[], float] = random.random,
     clock: Callable[[], float] = time.time,
     transformer: TransformClient | None = None,
+    breaker: CircuitBreaker | None = None,
+    live: LivePublisher | None = None,
 ) -> Handled:
     msg = parse_message(body)
-    lease_token = os.urandom(16)
+    lease_token = new_lease_token()
 
     cur = await conn.execute(
         CLAIM_SQL, (msg.delivery_id, msg.dispatch_seq, msg.dispatch_token, lease_token, config.lease_for)
     )
     rows = await cur.fetchall()
     if not rows:
+        obs.HANDLED.labels("duplicate").inc()
         return Handled("duplicate", msg.delivery_id)  # stale or duplicate: nothing to do, caller acks
-    _, attempt_no, message_id, event_id, url, signing_secrets, payload, endpoint_id, transformation = rows[0]
+    row = rows[0]
+    attempt_no, endpoint_id, tenant_id = row[1], row[7], row[10]  # the claim's column order
+    with obs.tracer.start_as_current_span("relay.deliver") as span:
+        span.set_attribute("relay.delivery_id", msg.delivery_id)
+        span.set_attribute("relay.attempt", attempt_no)
+        handled = await _deliver(
+            conn, msg, lease_token, sender, keyring, config, rng, clock, transformer, breaker, live, row
+        )
+        span.set_attribute("relay.result", handled.result)
+        if handled.error_class:
+            span.set_attribute("relay.error_class", handled.error_class)
+    obs.HANDLED.labels(handled.result).inc()
+    if live is not None and handled.result in LIVE_STATUS:  # the database already holds this outcome
+        await live.delivery(
+            tenant_id, msg.delivery_id, endpoint_id, LIVE_STATUS[handled.result], attempt_no, handled.error_class
+        )
+    return handled
+
+
+# What a console should show after each kind of result (fenced and duplicate change nothing).
+LIVE_STATUS = {"succeeded": "succeeded", "retry": "scheduled", "deferred": "scheduled", "dead": "dead"}
+
+
+async def _deliver(conn, msg, lease_token, sender, keyring, config, rng, clock, transformer, breaker, live, row):
+    """Everything after a successful claim: transform, sign, check the lease, send, record."""
+    (
+        _,
+        attempt_no,
+        message_id,
+        event_id,
+        url,
+        signing_secrets,
+        payload,
+        endpoint_id,
+        transformation,
+        replay_of,
+        tenant_id,
+    ) = row
 
     if transformation is not None:
         result = (
@@ -113,6 +162,8 @@ async def handle_message(
             "relay-event-id": str(event_id),
             "relay-delivery-id": msg.delivery_id,
         }
+        if replay_of is not None:  # spec section 5: a replay says so, and of what
+            headers |= {"relay-replay": "true", "relay-replay-of": str(replay_of)}
         # Spec section 5: right before sending, confirm by the database clock that the lease
         # outlives the whole request. If not (a slow claim, a stalled process), give the
         # delivery back without using an attempt rather than risk a send nobody can record.
@@ -122,12 +173,18 @@ async def handle_message(
         )
         if not (await cur.fetchone())[0]:
             return Handled("deferred", msg.delivery_id, attempt_no, "lease_too_short")
+        started = time.monotonic()
         try:
             sent = await sender.send(url, headers, payload_bytes, config.request_timeout)
         except Exception:  # a sender bug must not strand the delivery
             sent = SendResult(status=None, error_class="internal_error")
+        obs.SEND_SECONDS.observe(time.monotonic() - started)
+        if sent.status is not None:
+            trace.get_current_span().set_attribute("http.response.status_code", sent.status)
 
     verdict = classify(sent)
+    if breaker is not None:
+        await _update_breaker(conn, breaker, msg, lease_token, endpoint_id, verdict, live, tenant_id)
     retry_after = None
     if verdict.outcome == "retry":
         delay = backoff.next_delay(attempt_no, rng, config.retry_base, config.retry_cap)
@@ -140,6 +197,26 @@ async def handle_message(
     )
 
 
+async def _update_breaker(conn, breaker: CircuitBreaker, msg, lease_token, endpoint_id, verdict, live, tenant_id):
+    """Feed the result to the endpoint's breaker; mirror an opening while we still hold the lease."""
+    failed = counts_as_failure(verdict)
+    if failed is None:
+        return
+    decision = await breaker.record(str(endpoint_id), failed)
+    if decision.opens:
+        obs.BREAKER_OPENED.inc()
+        try:
+            await conn.execute(
+                "SELECT delivery.open_breaker(%s, %s, %s, %s)",
+                (msg.delivery_id, lease_token, decision.until, timedelta(seconds=breaker.jitter)),
+            )
+        except psycopg.errors.InvalidParameterValue:
+            # the reopen time is already past by the database clock (clock skew): nothing to mirror
+            return
+        if live is not None:
+            await live.breaker(tenant_id, endpoint_id, decision.until)
+
+
 async def _record(conn, msg, lease_token, attempt_no, outcome, status_code, error_class, retry_after) -> Handled:
     cur = await conn.execute(
         "SELECT delivery.record_attempt(%s, %s, %s, %s, %s, %s)",
@@ -150,4 +227,5 @@ async def _record(conn, msg, lease_token, attempt_no, outcome, status_code, erro
         return Handled("fenced", msg.delivery_id, attempt_no, error_class)
     # The database decides the final state (for example, a 12th failure becomes dead).
     result = {"succeeded": "succeeded", "scheduled": "retry", "dead": "dead"}[new_status]
+    obs.ATTEMPTS.labels(result, error_class or "none").inc()
     return Handled(result, msg.delivery_id, attempt_no, error_class)

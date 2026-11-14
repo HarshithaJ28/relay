@@ -51,14 +51,25 @@ class Settings:
     # publisher
     publisher_tick: float = 0.5
     publish_batch: int = 100
+    # Valkey: circuit breaker (worker) and ingestion rate limits; empty = both off
+    valkey_url: str = ""
+    breaker_window: float = 60.0
+    breaker_min_volume: int = 10
+    breaker_threshold: float = 0.5
+    breaker_cooldown: float = 30.0
+    breaker_max_cooldown: float = 600.0
     # retention
     retention_interval: float = 3600.0  # spec default: physical deletion follows within this interval
     retention_batch: int = 500
+    orphan_interval: float = 86400.0  # the orphan report runs once a day
+    # operations: /metrics, /healthz and /readyz (the ingestion API serves them on its own port)
+    metrics_port: int = 9100  # 0 turns the ops server off
     # ingestion API
     ingest_host: str = "0.0.0.0"
     ingest_port: int = 8080
     ingest_pool_size: int = 10
     idempotency_window_hours: float = 24.0
+    api_key_cache_seconds: float = 30.0  # a revoked key keeps working this long; 0 disables the cache
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None, needs_broker: bool = True) -> "Settings":
@@ -90,12 +101,21 @@ class Settings:
             reap_batch=int(_num(env, "RELAY_REAP_BATCH", d.reap_batch, 1, 1000)),
             publisher_tick=_num(env, "RELAY_PUBLISHER_TICK", d.publisher_tick, 0.05, 60),
             publish_batch=int(_num(env, "RELAY_PUBLISH_BATCH", d.publish_batch, 1, 1000)),
+            valkey_url=env.get("RELAY_VALKEY_URL", ""),
+            breaker_window=_num(env, "RELAY_BREAKER_WINDOW", d.breaker_window, 1, 3600),
+            breaker_min_volume=int(_num(env, "RELAY_BREAKER_MIN_VOLUME", d.breaker_min_volume, 1, 100000)),
+            breaker_threshold=_num(env, "RELAY_BREAKER_THRESHOLD", d.breaker_threshold, 0.01, 1),
+            breaker_cooldown=_num(env, "RELAY_BREAKER_COOLDOWN", d.breaker_cooldown, 0.1, 3600),
+            breaker_max_cooldown=_num(env, "RELAY_BREAKER_MAX_COOLDOWN", d.breaker_max_cooldown, 0.1, 86400),
             retention_interval=_num(env, "RELAY_RETENTION_INTERVAL", d.retention_interval, 0.05, 86400),
             retention_batch=int(_num(env, "RELAY_RETENTION_BATCH", d.retention_batch, 1, 10000)),
+            orphan_interval=_num(env, "RELAY_ORPHAN_INTERVAL", d.orphan_interval, 1, 7 * 86400),
+            metrics_port=int(_num(env, "RELAY_METRICS_PORT", d.metrics_port, 0, 65535)),
             ingest_host=env.get("RELAY_INGEST_HOST") or d.ingest_host,
             ingest_port=int(_num(env, "RELAY_INGEST_PORT", d.ingest_port, 1, 65535)),
             ingest_pool_size=int(_num(env, "RELAY_INGEST_POOL_SIZE", d.ingest_pool_size, 1, 200)),
             idempotency_window_hours=_num(
                 env, "RELAY_IDEMPOTENCY_WINDOW_HOURS", d.idempotency_window_hours, 1, 24 * 30
             ),
+            api_key_cache_seconds=_num(env, "RELAY_API_KEY_CACHE_SECONDS", d.api_key_cache_seconds, 0, 300),
         )

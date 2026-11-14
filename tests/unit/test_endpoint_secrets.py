@@ -194,3 +194,16 @@ def test_generated_secret_is_a_usable_standard_webhooks_secret():
     assert s != generate_signing_secret()
     headers = signing.signed_headers([s], "msg_1", 1_700_000_000, b"{}")
     assert signing.verify(s, headers, b"{}", now=1_700_000_000)
+
+
+def test_secrets_encrypted_by_the_control_plane_decrypt_here():
+    """The TypeScript control plane writes ciphertexts the Python worker must read (and back)."""
+    import json
+    import pathlib
+
+    from tests.conftest import TEST_KEYRING
+
+    vectors = json.loads((pathlib.Path(__file__).resolve().parents[1] / "fixtures" / "secret_vectors.json").read_text())
+    for origin in ("from_typescript", "from_python"):
+        v = vectors[origin]
+        assert TEST_KEYRING.decrypt(vectors["endpoint_id"], v["entry"]) == v["plaintext"], origin
