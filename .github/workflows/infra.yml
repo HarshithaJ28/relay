@@ -44,6 +44,17 @@ jobs:
         run: |
           helm lint --strict deploy/helm/relay
           helm lint --strict deploy/helm/relay-datastores
+      # Kubernetes injects RELAY_<SERVICE>_PORT variables otherwise, which collide with
+      # Relay's settings: every pod spec must turn service links off.
+      - name: Every pod spec turns off service links
+        run: |
+          for chart in relay relay-datastores; do
+            helm template x "deploy/helm/$chart" > rendered.yaml
+            pods=$(grep -cE '^  template:$|^kind: Pod$' rendered.yaml)
+            off=$(grep -c 'enableServiceLinks: false' rendered.yaml)
+            echo "$chart: $pods pod specs, $off with service links off"
+            test "$pods" -gt 0 && test "$pods" = "$off"
+          done
       - name: kubeconform
         run: |
           for chart in relay relay-datastores; do

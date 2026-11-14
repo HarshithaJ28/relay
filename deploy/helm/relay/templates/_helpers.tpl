@@ -18,6 +18,9 @@ app.kubernetes.io/component: {{ .component }}
 {{/* Pod security settings shared by every Relay container. */}}
 {{- define "relay.podSecurity" -}}
 automountServiceAccountToken: false
+# Kubernetes would otherwise add RELAY_<SERVICE>_PORT and similar variables for every
+# Service in the namespace, which collide with Relay's own settings (RELAY_INGEST_PORT).
+enableServiceLinks: false
 {{- with .Values.images.pullSecrets }}
 imagePullSecrets:
   {{- range . }}
