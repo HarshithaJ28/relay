@@ -1,0 +1,54 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* One accent colour (teal); everything else is neutral. */
+:root {
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.21 0.01 260);
+  --muted: oklch(0.97 0.003 260);
+  --muted-foreground: oklch(0.5 0.015 260);
+  --border: oklch(0.91 0.005 260);
+  --card: oklch(1 0 0);
+  --accent: oklch(0.55 0.11 190);
+  --accent-foreground: oklch(0.99 0 0);
+  --destructive: oklch(0.55 0.2 27);
+  --success: oklch(0.55 0.13 150);
+  --warning: oklch(0.7 0.14 75);
+  --ring: oklch(0.55 0.11 190);
+}
+
+.dark {
+  --background: oklch(0.17 0.01 260);
+  --foreground: oklch(0.95 0.005 260);
+  --muted: oklch(0.23 0.01 260);
+  --muted-foreground: oklch(0.7 0.012 260);
+  --border: oklch(0.3 0.01 260);
+  --card: oklch(0.2 0.01 260);
+  --accent: oklch(0.72 0.11 190);
+  --accent-foreground: oklch(0.17 0.01 260);
+  --destructive: oklch(0.7 0.17 25);
+  --success: oklch(0.72 0.14 150);
+  --warning: oklch(0.8 0.13 80);
+  --ring: oklch(0.72 0.11 190);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-card: var(--card);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-ring: var(--ring);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+}

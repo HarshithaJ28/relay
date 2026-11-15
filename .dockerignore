@@ -6,5 +6,12 @@
 !services/control-plane/tsconfig.json
 !services/control-plane/src/
 !db/migrations/
+!services/console/package.json
+!services/console/package-lock.json
+!services/console/tsconfig.json
+!services/console/next.config.ts
+!services/console/postcss.config.mjs
+!services/console/src/
+!services/console/public/
 !db/migrate.sh
 **/__pycache__
