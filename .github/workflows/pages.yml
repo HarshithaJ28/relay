@@ -1,0 +1,64 @@
+name: Pages
+
+# Publishes site/ (the status page that stays up when the demo is down) to GitHub Pages.
+# Needs Pages enabled once in the repository settings with "GitHub Actions" as the source.
+# The page checks the address in the repository variable RELAY_PUBLIC_URL, if set.
+
+on:
+  push:
+    branches: [main]
+    paths: [site/**, .github/workflows/pages.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build the status page
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Set the demo address
+        env:
+          ORIGIN: ${{ vars.RELAY_PUBLIC_URL }}
+        run: |
+          case "$ORIGIN" in
+            ""|https://*) ;;
+            *) echo "RELAY_PUBLIC_URL must start with https://"; exit 1 ;;
+          esac
+          mkdir -p _site
+          python3 - "$ORIGIN" <<'EOF'
+          import html, pathlib, sys
+          page = pathlib.Path("site/index.html").read_text()
+          marker = '<meta name="relay-origin" content="">'
+          assert page.count(marker) == 1
+          tag = f'<meta name="relay-origin" content="{html.escape(sys.argv[1], quote=True)}">'
+          pathlib.Path("_site/index.html").write_text(page.replace(marker, tag))
+          EOF
+      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: _site
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

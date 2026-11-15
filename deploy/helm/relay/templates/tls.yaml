@@ -1,0 +1,29 @@
+{{- $issuer := .Values.tls.issuer }}
+{{- if not (has $issuer (list "none" "letsencrypt" "selfsigned")) }}
+{{- fail "tls.issuer must be none, letsencrypt or selfsigned" }}
+{{- end }}
+{{- if ne $issuer "none" }}
+# A cert-manager Issuer for the Ingress certificate (cert-manager must be installed in the
+# cluster). The Ingress annotation makes cert-manager issue and renew ingress.tlsSecretName.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: relay-{{ $issuer }}
+  labels:
+    {{- include "relay.labels" . | nindent 4 }}
+spec:
+  {{- if eq $issuer "letsencrypt" }}
+  acme:
+    server: {{ .Values.tls.acmeServer }}
+    email: {{ required "tls.email is required for Let's Encrypt" .Values.tls.email | quote }}
+    privateKeySecretRef:
+      name: relay-acme-account
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: {{ .Values.ingress.className }}
+  {{- else }}
+  # For tests: a certificate no browser trusts.
+  selfSigned: {}
+  {{- end }}
+{{- end }}

@@ -23,7 +23,8 @@ WORKDIR /app
 COPY --from=build /build/node_modules ./node_modules
 COPY --from=build /build/dist ./dist
 COPY services/control-plane/package.json ./
-USER node
+# Numeric (node in this image): Kubernetes can only enforce runAsNonRoot on a numeric user.
+USER 1000:1000
 EXPOSE 8081
 STOPSIGNAL SIGTERM
 HEALTHCHECK --interval=30s --timeout=3s CMD node -e "fetch('http://127.0.0.1:'+(process.env.RELAY_CONTROL_PORT||8081)+'/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"

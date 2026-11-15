@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Relay status</title>
+  <meta name="description" content="Status of the Relay demo deployment, and where to read about the project when it is down.">
+  <!-- Filled in by the Pages workflow from the RELAY_PUBLIC_URL repository variable. -->
+  <meta name="relay-origin" content="">
+  <style>
+    :root {
+      --bg: #ffffff; --fg: #1d2129; --muted: #5b6270; --card: #f5f6f8; --border: #dfe2e7;
+      --up: #1a7f37; --down: #b42318; --unknown: #8a6100; --link: #0b5cad;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0f1115; --fg: #e6e8eb; --muted: #a3a9b4; --card: #181b21; --border: #2a2f38;
+        --up: #4ac26b; --down: #ff7b72; --unknown: #e3b341; --link: #6cb6ff;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--fg);
+      font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    main { max-width: 42rem; margin: 0 auto; padding: 3rem 1rem 4rem; }
+    h1 { font-size: 1.75rem; margin: 0 0 .25rem; }
+    .lede { color: var(--muted); margin: 0 0 2rem; }
+    .status {
+      display: flex; align-items: center; gap: .75rem; padding: 1rem 1.25rem;
+      background: var(--card); border: 1px solid var(--border); border-radius: .5rem;
+    }
+    .dot { width: .75rem; height: .75rem; border-radius: 50%; background: var(--unknown); flex: none; }
+    .status[data-state="up"] .dot { background: var(--up); }
+    .status[data-state="down"] .dot { background: var(--down); }
+    .status strong { display: block; }
+    .status span { color: var(--muted); font-size: .9rem; }
+    h2 { font-size: 1.1rem; margin: 2.25rem 0 .5rem; }
+    ul { padding-left: 1.25rem; }
+    a { color: var(--link); }
+    footer { margin-top: 3rem; color: var(--muted); font-size: .85rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Relay</h1>
+    <p class="lede">A multi-tenant webhook delivery platform. This page stays up when the demo does not.</p>
+
+    <div class="status" id="status" data-state="unknown" role="status" aria-live="polite">
+      <div class="dot" aria-hidden="true"></div>
+      <div>
+        <strong id="status-title">Checking the demo…</strong>
+        <span id="status-detail">Contacting the API from your browser.</span>
+      </div>
+    </div>
+
+    <h2>If the demo is down</h2>
+    <p>
+      The demo runs on a single free-tier machine (Oracle Cloud Always Free, one k3s node). It has no
+      standby, so a restart, an upgrade or the provider reclaiming the machine takes it offline until it
+      is brought back. While it is down, the API and ingestion refuse requests; the code and its test
+      results stay available on GitHub.
+    </p>
+
+    <h2>Read about Relay</h2>
+    <ul>
+      <li><a href="https://github.com/HarshithaJ28/relay">Source code and README</a>, including the known limitations</li>
+      <li><a href="https://github.com/HarshithaJ28/relay/blob/main/docs/architecture.md">Architecture and the delivery state machine</a></li>
+      <li><a href="https://github.com/HarshithaJ28/relay/tree/main/docs/adr">Architecture decision records</a></li>
+      <li><a href="https://github.com/HarshithaJ28/relay/actions">CI runs</a></li>
+    </ul>
+
+    <footer>Served by GitHub Pages, separately from the demo.</footer>
+  </main>
+  <script>
+    (function () {
+      var origin = (document.querySelector('meta[name="relay-origin"]').content || "").replace(/\/$/, "");
+      var box = document.getElementById("status");
+      var title = document.getElementById("status-title");
+      var detail = document.getElementById("status-detail");
+      function show(state, t, d) { box.dataset.state = state; title.textContent = t; detail.textContent = d; }
+      if (!origin) {
+        show("unknown", "The demo is not deployed yet.", "There is no public address to check.");
+        return;
+      }
+      var controller = new AbortController();
+      var timer = setTimeout(function () { controller.abort(); }, 8000);
+      // An opaque (no-cors) request only tells us whether the server answered at all.
+      fetch(origin + "/api/v1/openapi.json", { mode: "no-cors", cache: "no-store", signal: controller.signal })
+        .then(function () {
+          show("up", "The demo is reachable.", "Open " + origin);
+          detail.innerHTML = "";
+          var a = document.createElement("a"); a.href = origin; a.textContent = "Open " + origin;
+          detail.appendChild(a);
+        })
+        .catch(function () {
+          show("down", "The demo is not reachable right now.", "Checked " + origin + " from your browser just now.");
+        })
+        .finally(function () { clearTimeout(timer); });
+    })();
+  </script>
+</body>
+</html>

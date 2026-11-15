@@ -29,6 +29,14 @@ ingress:
 
 # Where the datastores are. The defaults match the relay-datastores chart installed in the
 # same namespace; point them elsewhere to use other servers.
+tls:
+  # none: ingress.tlsSecretName already holds a certificate. letsencrypt: cert-manager issues
+  # and renews one from Let's Encrypt (HTTP-01 through the ingress controller; port 80 must be
+  # reachable). selfsigned: an untrusted certificate, for tests. The last two need cert-manager.
+  issuer: none
+  email: ""
+  acmeServer: https://acme-v02.api.letsencrypt.org/directory
+
 database:
   host: relay-postgres
   port: 5432
@@ -123,3 +131,5 @@ egressSmokeTest:
   enabled: true
   # Also require that a public HTTPS host is reachable (off where the cluster has no internet).
   publicHost: ""
+  # How long to wait for the policy controller to apply a new pod's rules.
+  waitSeconds: 60

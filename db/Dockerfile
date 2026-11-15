@@ -10,5 +10,6 @@ LABEL org.opencontainers.image.source="https://github.com/HarshithaJ28/relay" \
 RUN rm -f /usr/local/bin/gosu
 COPY db/migrations /db/migrations
 COPY db/migrate.sh /usr/local/bin/relay-migrate
-USER postgres
+# Numeric (postgres in this image): Kubernetes can only enforce runAsNonRoot on a numeric user.
+USER 70:70
 ENTRYPOINT ["/usr/local/bin/relay-migrate"]

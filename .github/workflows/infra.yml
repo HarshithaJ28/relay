@@ -22,6 +22,7 @@ concurrency:
 env:
   KUBERNETES_VERSION: "1.31.0"
   K3S_VERSION: v1.31.4+k3s1
+  CERT_MANAGER_VERSION: v1.21.3
 
 jobs:
   chart:
@@ -44,15 +45,36 @@ jobs:
         run: |
           helm lint --strict deploy/helm/relay
           helm lint --strict deploy/helm/relay-datastores
-      - name: kubeconform
+      # Kubernetes injects RELAY_<SERVICE>_PORT variables otherwise, which collide with
+      # Relay's settings: every pod spec must turn service links off.
+      - name: Every pod spec turns off service links
         run: |
           for chart in relay relay-datastores; do
-            for args in "" "--set networkPolicy.enabled=false"; do
-              # shellcheck disable=SC2086
-              helm template x "deploy/helm/$chart" $args |
-                kubeconform -strict -summary -kubernetes-version "$KUBERNETES_VERSION"
-            done
+            helm template x "deploy/helm/$chart" > rendered.yaml
+            pods=$(grep -cE '^  template:$|^kind: Pod$' rendered.yaml)
+            off=$(grep -c 'enableServiceLinks: false' rendered.yaml)
+            echo "$chart: $pods pod specs, $off with service links off"
+            test "$pods" -gt 0 && test "$pods" = "$off"
           done
+      - name: kubeconform
+        env:
+          # cert-manager's Issuer is a custom resource: its schema comes from the CRDs catalog.
+          CRD_SCHEMAS: https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json
+        run: |
+          check() {
+            # shellcheck disable=SC2086
+            helm template x "deploy/helm/$1" $2 |
+              kubeconform -strict -summary -kubernetes-version "$KUBERNETES_VERSION" \
+                -schema-location default -schema-location "$CRD_SCHEMAS"
+          }
+          for chart in relay relay-datastores; do
+            check "$chart" ""
+            check "$chart" "--set networkPolicy.enabled=false"
+          done
+          check relay "--set tls.issuer=selfsigned"
+          check relay "--set tls.issuer=letsencrypt --set tls.email=ops@example.com"
+          # a Let's Encrypt issuer without an email must not render
+          if helm template x deploy/helm/relay --set tls.issuer=letsencrypt >/dev/null 2>&1; then exit 1; fi
 
   terraform:
     name: Terraform (fmt, validate, tflint)
@@ -117,8 +139,14 @@ jobs:
         run: |
           curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="$K3S_VERSION" sh -s - --write-kubeconfig-mode 644
           mkdir -p ~/.kube && cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
-          for i in $(seq 60); do kubectl get nodes | grep -q " Ready" && break; sleep 2; done
-          kubectl wait --for=condition=Ready pods --all -n kube-system --timeout=180s
+          # k3s creates the node, then CoreDNS, then Traefik (through a Helm install job), a
+          # few seconds apart: wait for each to exist before waiting for it to be ready.
+          for i in $(seq 90); do kubectl get nodes 2>/dev/null | grep -q " Ready" && break; sleep 2; done
+          kubectl wait --for=condition=Ready node --all --timeout=60s
+          for d in coredns traefik; do
+            for i in $(seq 90); do kubectl -n kube-system get deployment "$d" >/dev/null 2>&1 && break; sleep 2; done
+            kubectl -n kube-system rollout status deployment "$d" --timeout=180s
+          done
 
       - name: Build the three images and load them into k3s
         run: |
@@ -147,12 +175,25 @@ jobs:
       - name: Install the datastores
         run: helm install relay-data deploy/helm/relay-datastores -n relay --wait --timeout 10m
 
+      - name: Install cert-manager
+        run: |
+          helm install cert-manager cert-manager --repo https://charts.jetstack.io --version "$CERT_MANAGER_VERSION" \
+            -n cert-manager --create-namespace --set crds.enabled=true --wait --timeout 5m
+
       - name: helm install (the migration job runs first, then every rollout)
         run: |
           helm install relay deploy/helm/relay -n relay --wait --timeout 10m \
             --set images.tag=ci --set images.pullPolicy=Never \
             --set ingress.host=relay.ci.test --set publicUrl=https://relay.ci.test \
-            --set egressSmokeTest.publicHost=github.com
+            --set egressSmokeTest.publicHost=github.com --set tls.issuer=selfsigned
+
+      # cert-manager issues the Ingress certificate (self-signed here, Let's Encrypt in production).
+      - name: The certificate is issued and the API answers over HTTPS
+        run: |
+          kubectl -n relay wait certificate/relay-tls --for=condition=Ready --timeout=120s
+          curl -sSf -k --resolve relay.ci.test:443:127.0.0.1 https://relay.ci.test/api/v1/openapi.json -o /dev/null
+          echo | openssl s_client -connect 127.0.0.1:443 -servername relay.ci.test 2>/dev/null |
+            openssl x509 -noout -ext subjectAltName | grep -q "DNS:relay.ci.test"
 
       - name: The API answers through Traefik, and registration needs an invite
         run: |
@@ -177,5 +218,12 @@ jobs:
         if: failure()
         run: |
           kubectl -n relay get pods,jobs,pvc,networkpolicies -o wide || true
+          kubectl -n relay get events --sort-by=.lastTimestamp | tail -60 || true
+          # How the node enforces the policies: k3s's policy controller (kube-router) chains,
+          # the address sets it builds from ipBlock rules, and the chains that run before them.
+          echo "== filter table"; sudo iptables-save -t filter | grep -E '^(:|-A (INPUT|FORWARD|OUTPUT|KUBE-ROUTER|KUBE-NWPLCY|KUBE-POD-FW|FLANNEL))' | head -300 || true
+          echo "== ipsets"; sudo ipset list -t || true
+          for set in $(sudo ipset list -n | grep -i -E 'KUBE-DST|KUBE-SRC' | head -20); do echo "-- $set"; sudo ipset list "$set" | sed -n '/Members/,$p' | head -40; done || true
+          echo "== routes"; ip route || true
           kubectl -n relay describe pods || true
           for p in $(kubectl -n relay get pods -o name); do echo "== $p"; kubectl -n relay logs "$p" --all-containers --tail=50 || true; done

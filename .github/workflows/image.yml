@@ -68,6 +68,8 @@ jobs:
           docker run --rm relay-data-plane:smoke python -c \
             "import relay_dataplane.processes, relay_dataplane.ingest, relay_dataplane.retention, relay_dataplane.breaker, relay_dataplane.ratelimit"
           test "$(docker run --rm relay-data-plane:smoke id -u)" = "10001"
+          # runAsNonRoot in the chart needs a numeric user
+          docker inspect -f '{{.Config.User}}' relay-data-plane:smoke | grep -Eq '^[0-9]+(:[0-9]+)?$'
           # a missing configuration must fail fast with exit code 2, not start half-configured
           set +e; docker run --rm relay-data-plane:smoke; code=$?; set -e
           test "$code" = "2"
@@ -155,6 +157,7 @@ jobs:
       - name: Smoke test
         run: |
           test "$(docker run --rm relay-control-plane:smoke id -un)" = "node"
+          docker inspect -f '{{.Config.User}}' relay-control-plane:smoke | grep -Eq '^[0-9]+(:[0-9]+)?$'
           # a missing configuration must fail fast with exit code 2
           set +e; docker run --rm relay-control-plane:smoke; code=$?; set -e
           test "$code" = "2"
@@ -246,6 +249,7 @@ jobs:
       - name: Smoke test
         run: |
           test "$(docker run --rm --entrypoint id relay-migrations:smoke -un)" = "postgres"
+          docker inspect -f '{{.Config.User}}' relay-migrations:smoke | grep -Eq '^[0-9]+(:[0-9]+)?$'
           # without a database URL it must refuse to start
           set +e; docker run --rm relay-migrations:smoke; code=$?; set -e
           test "$code" != "0"

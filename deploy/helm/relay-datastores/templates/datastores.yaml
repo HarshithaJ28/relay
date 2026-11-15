@@ -34,6 +34,7 @@ spec:
         {{- include "relay.selector" (dict "root" $ "component" $name) | nindent 8 }}
     spec:
       automountServiceAccountToken: false
+      enableServiceLinks: false
       {{- if eq $name "postgres" }}
       securityContext: { runAsNonRoot: true, runAsUser: 999, runAsGroup: 999, fsGroup: 999, seccompProfile: { type: RuntimeDefault } }
       volumes:
@@ -128,6 +129,7 @@ spec:
         {{- include "relay.selector" (dict "root" . "component" "valkey") | nindent 8 }}
     spec:
       automountServiceAccountToken: false
+      enableServiceLinks: false
       securityContext: { runAsNonRoot: true, runAsUser: 999, runAsGroup: 999, seccompProfile: { type: RuntimeDefault } }
       containers:
         - name: valkey

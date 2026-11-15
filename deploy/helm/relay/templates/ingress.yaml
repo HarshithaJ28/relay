@@ -5,7 +5,11 @@ metadata:
   name: relay
   labels:
     {{- include "relay.labels" . | nindent 4 }}
-  {{- with .Values.ingress.annotations }}
+  {{- $annotations := .Values.ingress.annotations | default dict }}
+  {{- if ne .Values.tls.issuer "none" }}
+  {{- $annotations = merge (dict "cert-manager.io/issuer" (printf "relay-%s" .Values.tls.issuer)) $annotations }}
+  {{- end }}
+  {{- with $annotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
   {{- end }}

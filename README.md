@@ -120,10 +120,12 @@ Built (`db/migrations`, `services/data-plane/relay_dataplane`):
   which stays narrower (no endpoint URLs). Functions that run before a tenant is known (register, login lookup,
   session rotation, Stripe events) are owned by the plain role `relay_auth`. `RELAY_VALKEY_URL` is required.
 - Deployment (`deploy/`, `docs/deploy.md`): Helm charts `relay` (the services, an Ingress for `/api` and
-  `/ingest`, NetworkPolicies, and a `helm test` egress smoke test) and `relay-datastores` (single-node
+  `/ingest` with a cert-manager certificate from Let's Encrypt, NetworkPolicies, and a `helm test` egress smoke
+  test) and `relay-datastores` (single-node
   PostgreSQL, RabbitMQ and Valkey); a migration image (`db/migrate.sh`) that applies each new file in one
   transaction before every install and upgrade; Terraform for one Oracle Always Free k3s machine (state in OCI
-  Object Storage) and a validate-only AWS equivalent with a billing alert.
+  Object Storage) and a validate-only AWS equivalent with a billing alert; a status page (`site/`, published to
+  GitHub Pages by `pages.yml`) that checks the demo from the visitor's browser and stays up when it is down.
 - Long-running processes (`python -m relay_dataplane worker|scheduler|reaper|publisher|ingest|retention`, one
   image):
   - worker: consumes with a prefetch limit, checks by the database clock that the lease outlives the request
@@ -170,7 +172,9 @@ Control-plane tests (Node 22; the same real PostgreSQL with these migrations, an
 - `infra.yml`: `helm lint` and `kubeconform` for both charts; `terraform fmt`, `validate` (no credentials, no
   backend) and `tflint` for the three Terraform stacks; a Trivy configuration scan; and a job that installs real
   k3s on the runner, deploys both charts with images built from the commit, checks the API through Traefik, runs
-  the egress smoke test, then repeats it with the NetworkPolicies off and requires it to fail.
+  the egress smoke test, then repeats it with the NetworkPolicies off and requires it to fail. With the policies,
+  a pod with the worker's labels is refused by the Kubernetes API, other Relay pods, the node's kubelet, k3s API
+  and SSH ports and 169.254.169.254, and reaches a public HTTPS host; without them it reaches all of them.
 - `security.yml`: gitleaks over the full history, CodeQL (Python, TypeScript and the workflows) and OpenSSF
   Scorecard.
 - `deploy.yml`: after the images for a commit on main are published, upgrades both releases on the k3s host over
@@ -267,12 +271,16 @@ Control-plane tests (Node 22; the same real PostgreSQL with these migrations, an
 ### Known limitations
 
 - No performance, throughput or latency numbers exist. None have been measured.
-- RabbitMQ ran as a single node. Nothing here supports a high-availability claim.
+- RabbitMQ runs as a single node. `tests/broker` starts a three-node 3.13 cluster on one machine and shows the
+  dispatch queue's quorum behaviour: all confirmed messages survive the loss of the leader, a publish is not
+  confirmed while only one of three nodes runs, and publishing resumes when a second returns. That is behaviour
+  on one machine, not a high-availability claim.
 - The harness and `docker-compose.yml` were run on Linux (Docker 29) only, not yet on macOS or Windows.
 - Nothing has been deployed. The Helm charts, Terraform stacks and deploy job exist; the charts were checked with
-  `helm lint` and `kubeconform`, and Terraform with `validate` and `tflint`, but `infra.yml`'s k3s job (which
-  installs the charts and runs the egress smoke test on a real cluster) has not run yet, and no Terraform stack
-  has been applied. The datastores run as single pods on one node.
+  `helm lint` and `kubeconform`, and Terraform with `validate` and `tflint`. `infra.yml`'s k3s job installs
+  both charts on single-node k3s in CI: the migrations, every rollout, the API through Traefik and the egress
+  smoke test pass there. No Terraform stack has been applied. The datastores run as single
+  pods on one node.
 - The processes have run only as local subprocesses with shrunk timings (1 s request timeout, sub-second
   retries), not in a cluster and not with the production defaults. Outages were 5 s long; longer ones and
   network partitions have not been tested.
@@ -288,8 +296,10 @@ Control-plane tests (Node 22; the same real PostgreSQL with these migrations, an
 - The real transformation runner (Node, JSONata) does not exist; AC-2 was tested against an HTTP runner double
   that follows the documented protocol. There is no runner circuit breaker yet.
 - The HTTP sender has only sent to a local test receiver, never to a real public endpoint, and only with
-  scripted DNS in tests. The NetworkPolicies and the egress smoke test (the second SSRF layer) exist but have not
-  yet run on a cluster.
+  scripted DNS in tests. The NetworkPolicy (the second SSRF layer) has been checked on single-node k3s in CI
+  only, not yet on the Oracle host. k3s's policy controller applies a new pod's rules a few seconds after the pod
+  starts (in CI the smoke test passed on its second attempt, 3 s apart), so a just-started worker is unprotected
+  by this layer for that window; the sender's own checks still apply.
 - Master keys are read from the environment or a file; no KMS integration. Re-encrypting stored secrets after a
   master-key change is a library function (`reencrypt`) with no job or command that runs it yet.
 - The breaker's defaults (60 s window, 10 results, 50 % failures, 30 s cool-down up to 10 min) and the tenant
