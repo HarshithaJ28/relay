@@ -7,7 +7,11 @@ import { type LiveEvent, runStream } from "./stream";
 type Status = "off" | "connecting" | "open" | "waiting";
 type Listener = (event: LiveEvent) => void;
 
-const Ctx = createContext<{ status: Status; subscribe: (fn: Listener) => () => void } | null>(null);
+/** Exported so component tests can feed events without a stream. */
+export const LiveContext = createContext<{ status: Status; subscribe: (fn: Listener) => () => void } | null>(
+  null,
+);
+const Ctx = LiveContext;
 
 /**
  * Runs the live stream while logged in. Screens subscribe to events; after a reconnect

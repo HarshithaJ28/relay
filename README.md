@@ -132,7 +132,11 @@ Built (`db/migrations`, `services/data-plane/relay_dataplane`):
   test checks against `live.py`. Endpoints screen: list, add, edit, enable and disable, send a test event, rotate the
   secret (with the overlap explained) and delete, with admin actions hidden from viewers; a URL the SSRF checks
   refuse is shown on the URL field; the signing secret is shown once with a copy button and dropped from every
-  cache when the dialog closes. The other data screens are not built yet.
+  cache when the dialog closes. Deliveries screen: filters by endpoint, status and time kept in the URL, cursor
+  paging, and live updates (a shown row changes in place; new matching deliveries trigger one debounced refetch);
+  the detail page shows the payload, or the date it expired, and every attempt with outcome, HTTP status, error
+  class, time and the gap since the previous one (request durations are not recorded). Replay, health, overview,
+  keys and users are not built yet.
 - Deployment (`deploy/`, `docs/deploy.md`): Helm charts `relay` (the services, an Ingress for `/api` and
   `/ingest` with a cert-manager certificate from Let's Encrypt, NetworkPolicies, and a `helm test` egress smoke
   test) and `relay-datastores` (single-node
@@ -320,8 +324,7 @@ Control-plane tests (Node 22; the same real PostgreSQL with these migrations, an
 - The breaker's defaults (60 s window, 10 results, 50 % failures, 30 s cool-down up to 10 min) and the tenant
   limits (10 per endpoint, 100 per tenant, 100 events/s with a burst of 200) are provisional; the spec calls for
   choosing them from chaos-receiver experiments, which have not been run.
-- Not built yet: the console's data screens other than endpoints (deliveries, replay, health, overview, keys and
-  users),
+- Not built yet: the console's replay, health, overview, keys and users screens,
   its Cypress, Lighthouse and Faro set-up and Helm entry, the transformation runner and authoring flow, and the AI
   features.
 - The publisher confirms one message at a time; its throughput is unmeasured.
