@@ -142,8 +142,12 @@ Built (`db/migrations`, `services/data-plane/relay_dataplane`):
   for a preview of exactly the current settings. Endpoint health: the breaker as closed, open (with when it is
   retried) or probing (the pause is over and one delivery is the probe), which turns from open to probing on time
   without a refetch; a breaker event opens it at once, and since no event marks a close, any delivery event for
-  the endpoint refetches it; plus the 24-hour success rate, active deliveries and errors by class. Overview, keys
-  and users are not built yet.
+  the endpoint refetches it; plus the 24-hour success rate, active deliveries and errors by class. Overview: totals,
+  month-to-date usage against the plan, and charts of events, deliveries by outcome and success rate for the last
+  24 hours, 7 days or 30 days, each with a hover tooltip and a table view. Requests end at a UTC bucket edge so
+  the stats cache is used. Chart colours are categorical slots checked with a colour-vision-deficiency validator
+  (worst adjacent pair ΔE 9.2 in light mode and 9.4 in dark, simulated deuteranopia; the console's teal accent
+  and a green/red pair both failed it and are not used for data). Keys and users are not built yet.
 - Deployment (`deploy/`, `docs/deploy.md`): Helm charts `relay` (the services, an Ingress for `/api` and
   `/ingest` with a cert-manager certificate from Let's Encrypt, NetworkPolicies, and a `helm test` egress smoke
   test) and `relay-datastores` (single-node
@@ -331,7 +335,7 @@ Control-plane tests (Node 22; the same real PostgreSQL with these migrations, an
 - The breaker's defaults (60 s window, 10 results, 50 % failures, 30 s cool-down up to 10 min) and the tenant
   limits (10 per endpoint, 100 per tenant, 100 events/s with a burst of 200) are provisional; the spec calls for
   choosing them from chaos-receiver experiments, which have not been run.
-- Not built yet: the console's overview, keys and users screens,
+- Not built yet: the console's keys and users screens,
   its Cypress, Lighthouse and Faro set-up and Helm entry, the transformation runner and authoring flow, and the AI
   features.
 - The publisher confirms one message at a time; its throughput is unmeasured.
