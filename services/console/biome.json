@@ -1,6 +1,6 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.6.7/schema.json",
-  "files": { "includes": ["src/**", "test/**", "scripts/**", "!src/lib/api/schema.d.ts"] },
+  "files": { "includes": ["src/**", "test/**", "scripts/**", "cypress/**", "cypress.config.ts", "!src/lib/api/schema.d.ts"] },
   "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2, "lineWidth": 110 },
   "linter": { "enabled": true, "rules": { "recommended": true } },
   "css": { "parser": { "tailwindDirectives": true } },

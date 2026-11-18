@@ -5,7 +5,7 @@ import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { z } from "zod";
 import { generateApiKey, SCOPES, sha256 } from "../apiKeys.js";
 import { hashPassword } from "../auth.js";
-import { withTenant } from "../db.js";
+import { pgCode, withTenant } from "../db.js";
 import { notFound, Problem } from "../problem.js";
 import * as t from "../schema.js";
 import { IdParams, iso } from "./shared.js";
@@ -82,8 +82,7 @@ export async function catalogRoutes(app: FastifyInstance) {
         });
         return reply.status(201).send({ id: row.id, email, role });
       } catch (e) {
-        if ((e as { code?: string }).code === "23505")
-          throw new Problem(409, "email-taken", "That email is already registered");
+        if (pgCode(e) === "23505") throw new Problem(409, "email-taken", "That email is already registered");
         throw e;
       }
     },
@@ -177,8 +176,7 @@ export async function catalogRoutes(app: FastifyInstance) {
         );
         return reply.status(201).send({ ...row, createdAt: iso(row?.createdAt) });
       } catch (e) {
-        if ((e as { code?: string }).code === "23505")
-          throw new Problem(409, "exists", "That event type already exists");
+        if (pgCode(e) === "23505") throw new Problem(409, "exists", "That event type already exists");
         throw e;
       }
     },
@@ -227,8 +225,7 @@ export async function catalogRoutes(app: FastifyInstance) {
             .returning();
           return sub;
         } catch (e) {
-          if ((e as { code?: string }).code === "23505")
-            throw new Problem(409, "exists", "Already subscribed");
+          if (pgCode(e) === "23505") throw new Problem(409, "exists", "Already subscribed");
           throw e;
         }
       });

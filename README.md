@@ -280,7 +280,7 @@ Control-plane tests (Node 22; the same real PostgreSQL with these migrations, an
   contain message bodies, at DEBUG.
 - Every process serves metrics, health and readiness, its counters reflect its work, and every log line is JSON;
   the dashboard and alert rules reference only exported metrics.
-- Control plane (146 tests, real PostgreSQL and Valkey): stats range and bucket limits, success rate, cache hits
+- Control plane (147 tests, real PostgreSQL and Valkey): stats range and bucket limits, success rate, cache hits
   and expiry, tenant isolation; invite codes (single use, expiry, a taken email
   leaves the code usable, three simultaneous registrations with one code give one tenant, only the operator
   role makes codes), login throttling (account and IP locks, unlock after the lock time, a successful login
@@ -289,7 +289,14 @@ Control-plane tests (Node 22; the same real PostgreSQL with these migrations, an
   tampered, expired, foreign-key and foreign-audience tokens refused, roles, the spec's isolation test (another
   tenant calls every route with this tenant's ids and gets 404), SSRF corpus and DNS checks at save time, plan
   limits, secret rotation, AC-3 payload hiding, replay and bulk replay, pagination that never skips rows created
-  in the same millisecond, Stripe signatures and idempotency, and the live stream.
+  in the same millisecond, Stripe signatures and idempotency, the live stream, and a duplicate event type or
+  subscription answered with a 409 problem (the console's end-to-end tests found it was a 500).
+- Console end-to-end (7 Cypress tests, `npm run e2e`): the built console and the real control plane on a fresh
+  database with its migrations, tenants made through operator invites. Sign-in, a session that survives a reload
+  through the same-origin refresh cookie, sign-out, a wrong password; an endpoint's secret shown once, a test
+  event, and replay of a delivery marked dead; event types, subscriptions, an API key shown once, and a viewer's
+  read-only console. No data-plane process runs, so nothing is sent: the replay test marks a delivery dead in the
+  database itself. Removing the role gate, the refresh on load or the replay button each makes a test fail.
 - Mutation checks: removing each token, sequence, status or lease guard, an off-by-one at the retry limit, or
   marking an outbox row before the broker confirms, makes at least one test fail. The same holds for each
   SSRF guard (25 mutants: the address checks, URL checks, redirects, proxies, cookies, body limit and
@@ -338,7 +345,7 @@ Control-plane tests (Node 22; the same real PostgreSQL with these migrations, an
 - The breaker's defaults (60 s window, 10 results, 50 % failures, 30 s cool-down up to 10 min) and the tenant
   limits (10 per endpoint, 100 per tenant, 100 events/s with a burst of 200) are provisional; the spec calls for
   choosing them from chaos-receiver experiments, which have not been run.
-- Not built yet: the console's Cypress, Lighthouse and Faro set-up, the transformation runner and authoring flow, and the AI
+- Not built yet: the console's Lighthouse and Faro set-up, the transformation runner and authoring flow, and the AI
   features.
 - The publisher confirms one message at a time; its throughput is unmeasured.
 - Months that already have rows in the default partition stay there; partitions are created ahead of time

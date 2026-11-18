@@ -95,7 +95,7 @@ jobs:
   console:
     name: Console (TypeScript)
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: services/console
@@ -126,6 +126,20 @@ jobs:
         run: npm run build
       - name: dependency audit
         run: npm audit --omit=dev --audit-level=moderate
+      # Cypress against the real control plane on a fresh database (cypress/stack.mjs).
+      - name: end-to-end tests
+        run: |
+          (cd ../.. && docker compose up -d --wait postgres valkey)
+          npm run e2e:typecheck
+          npm run e2e
+      - name: Upload end-to-end screenshots
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: console-e2e-screenshots
+          path: services/console/cypress/screenshots
+          if-no-files-found: ignore
+          retention-days: 14
 
   audit:
     name: Dependency audit
