@@ -297,6 +297,14 @@ Control-plane tests (Node 22; the same real PostgreSQL with these migrations, an
   event, and replay of a delivery marked dead; event types, subscriptions, an API key shown once, and a viewer's
   read-only console. No data-plane process runs, so nothing is sent: the replay test marks a delivery dead in the
   database itself. Removing the role gate, the refresh on load or the replay button each makes a test fail.
+- Console Lighthouse (`npm run lighthouse`, in CI): five pages, signed in, on the production build and the same
+  stack, three runs each with Lighthouse's default mobile emulation (simulated slow 4G, CPU slow-down); the
+  median must reach the minimums in `scripts/lighthouse-thresholds.json`. Measured here: accessibility 100 on
+  every page; best practices 100, except 96 on the login page, where the signed-out session check logs a 401;
+  performance medians 81 (the overview's charts) to 99, lowest single run 78. The minimums (accessibility 100,
+  best practices 96, performance 70) come from those runs, with room for slower CI machines. The first run
+  found light-mode colour contrast below 4.5:1 for primary buttons, success badges and, by calculation, the
+  warning and danger badges; those colours were darkened, and putting the old teal back fails the run.
 - Mutation checks: removing each token, sequence, status or lease guard, an off-by-one at the retry limit, or
   marking an outbox row before the broker confirms, makes at least one test fail. The same holds for each
   SSRF guard (25 mutants: the address checks, URL checks, redirects, proxies, cookies, body limit and
@@ -345,7 +353,7 @@ Control-plane tests (Node 22; the same real PostgreSQL with these migrations, an
 - The breaker's defaults (60 s window, 10 results, 50 % failures, 30 s cool-down up to 10 min) and the tenant
   limits (10 per endpoint, 100 per tenant, 100 events/s with a burst of 200) are provisional; the spec calls for
   choosing them from chaos-receiver experiments, which have not been run.
-- Not built yet: the console's Lighthouse and Faro set-up, the transformation runner and authoring flow, and the AI
+- Not built yet: the console's Faro set-up, the transformation runner and authoring flow, and the AI
   features.
 - The publisher confirms one message at a time; its throughput is unmeasured.
 - Months that already have rows in the default partition stay there; partitions are created ahead of time

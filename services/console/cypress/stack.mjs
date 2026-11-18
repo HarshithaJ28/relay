@@ -4,6 +4,7 @@
  *   docker compose up -d --wait postgres valkey     (from the repository root)
  *   (cd ../control-plane && npm run build)
  *   npm run e2e                                     (or: npm run e2e -- --open)
+ *   npm run lighthouse                              (the same stack, then scripts/lighthouse.mjs)
  *
  * The console is built first with RELAY_CONTROL_PLANE_URL set: Next.js fixes rewrites at
  * build time, so a build made without it has no /api route.
@@ -149,19 +150,22 @@ async function main() {
     await waitFor(`http://127.0.0.1:${API_PORT}/healthz`);
     await waitFor(`http://127.0.0.1:${WEB_PORT}/api/v1/openapi.json`);
 
-    const mode = process.argv.includes("--open") ? "open" : "run";
-    const extra = process.argv.slice(2).filter((a) => a !== "--open");
-    const cypress = spawn(join(consoleDir, "node_modules", ".bin", "cypress"), [mode, ...extra], {
-      cwd: consoleDir,
-      stdio: "inherit",
-      env: {
-        ...process.env,
-        CYPRESS_baseUrl: `http://127.0.0.1:${WEB_PORT}`,
-        RELAY_E2E_OWNER_DSN: dsn("relay_owner"),
-        RELAY_E2E_SU: JSON.stringify({ host: PG_HOST, port: PG_PORT, user: "postgres", database: DB }),
-        RELAY_E2E_API: `http://127.0.0.1:${API_PORT}`,
-      },
-    });
+    const env = {
+      ...process.env,
+      CYPRESS_baseUrl: `http://127.0.0.1:${WEB_PORT}`,
+      RELAY_E2E_WEB: `http://127.0.0.1:${WEB_PORT}`,
+      RELAY_E2E_OWNER_DSN: dsn("relay_owner"),
+      RELAY_E2E_SU: JSON.stringify({ host: PG_HOST, port: PG_PORT, user: "postgres", database: DB }),
+      RELAY_E2E_API: `http://127.0.0.1:${API_PORT}`,
+    };
+    const args = process.argv.slice(2);
+    const cypress = args.includes("--lighthouse")
+      ? spawn(process.execPath, [join(consoleDir, "scripts", "lighthouse.mjs")], { cwd: consoleDir, stdio: "inherit", env })
+      : spawn(
+          join(consoleDir, "node_modules", ".bin", "cypress"),
+          [args.includes("--open") ? "open" : "run", ...args.filter((a) => a !== "--open")],
+          { cwd: consoleDir, stdio: "inherit", env },
+        );
     return await new Promise((resolve) => cypress.on("exit", (code) => resolve(code ?? 1)));
   } finally {
     stopAll();

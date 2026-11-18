@@ -132,6 +132,17 @@ jobs:
           (cd ../.. && docker compose up -d --wait postgres valkey)
           npm run e2e:typecheck
           npm run e2e
+      # Lighthouse on the same stack, signed in; minimums in scripts/lighthouse-thresholds.json.
+      - name: Lighthouse
+        run: npm run lighthouse
+      - name: Upload Lighthouse reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: console-lighthouse
+          path: services/console/lighthouse-results
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Upload end-to-end screenshots
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

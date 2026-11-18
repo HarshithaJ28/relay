@@ -17,6 +17,7 @@
     "api:generate": "node scripts/generate-api.mjs",
     "api:check": "node scripts/generate-api.mjs --check",
     "e2e": "node cypress/stack.mjs",
+    "lighthouse": "node cypress/stack.mjs --lighthouse",
     "e2e:typecheck": "tsc -p cypress/tsconfig.json"
   },
   "dependencies": {
@@ -54,6 +55,7 @@
     "@vitejs/plugin-react": "6.3.0",
     "cypress": "16.2.1",
     "jsdom": "31.0.1",
+    "lighthouse": "13.6.0",
     "msw": "3.0.6",
     "openapi-typescript": "7.13.0",
     "pg": "8.23.1",
