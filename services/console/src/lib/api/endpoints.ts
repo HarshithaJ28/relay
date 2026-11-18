@@ -36,6 +36,15 @@ export function useEndpoints() {
   });
 }
 
+export function useEndpoint(id: string) {
+  const api = useApi();
+  return useQuery({
+    queryKey: endpointKeys.one(id),
+    queryFn: async () =>
+      Endpoint.parse(unwrap(await api.GET("/api/v1/endpoints/{id}", { params: { path: { id } } }))),
+  });
+}
+
 export function useCreateEndpoint() {
   const api = useApi();
   const qc = useQueryClient();

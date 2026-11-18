@@ -1,6 +1,8 @@
 "use client";
+import { useQueryClient } from "@tanstack/react-query";
 import { type ColumnDef, flexRender, getCoreRowModel, useReactTable } from "@tanstack/react-table";
 import { Plus } from "lucide-react";
+import Link from "next/link";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { ProblemMessage } from "@/components/problem-message";
@@ -11,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   type Endpoint,
+  endpointKeys,
   useCreateEndpoint,
   useDeleteEndpoint,
   useEndpoints,
@@ -21,6 +24,7 @@ import {
 import { type Problem, toProblem } from "@/lib/api/problem";
 import { RequireRole } from "@/lib/auth/require-role";
 import { formatDate, formatRelative } from "@/lib/format";
+import { useLiveEvents } from "@/lib/live/context";
 import { EndpointForm } from "./endpoint-form";
 import { SecretOnce } from "./secret-once";
 
@@ -44,6 +48,11 @@ export function StatusBadge({ endpoint }: { endpoint: Endpoint }) {
 
 export function EndpointsPage() {
   const list = useEndpoints();
+  const qc = useQueryClient();
+  // An endpoint's breaker opened: refresh the list so its badge changes.
+  useLiveEvents((e) => {
+    if (e.type === "breaker") void qc.invalidateQueries({ queryKey: endpointKeys.all });
+  });
   const [open, setOpen] = useState<Open>({ kind: "none" });
   const close = () => setOpen({ kind: "none" });
 
@@ -52,7 +61,11 @@ export function EndpointsPage() {
       {
         header: "URL",
         accessorKey: "url",
-        cell: (c) => <span className="break-all">{c.row.original.url}</span>,
+        cell: (c) => (
+          <Link href={`/endpoints/${c.row.original.id}`} className="break-all hover:underline">
+            {c.row.original.url}
+          </Link>
+        ),
       },
       { header: "Status", id: "status", cell: (c) => <StatusBadge endpoint={c.row.original} /> },
       { header: "Concurrency", accessorKey: "concurrency_limit" },

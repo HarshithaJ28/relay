@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpResponse, http } from "msw";
 import { setupServer } from "msw/node";
@@ -8,6 +8,8 @@ import { Endpoint } from "@/lib/api/endpoints";
 import { AuthProvider } from "@/lib/auth/context";
 import { Session } from "@/lib/auth/session";
 import { formatRelative } from "@/lib/format";
+import { LiveContext } from "@/lib/live/context";
+import type { LiveEvent } from "@/lib/live/stream";
 
 const origin = "http://localhost:3000";
 const SECRET = `whsec_${"A".repeat(43)}`;
@@ -27,6 +29,7 @@ const problem = (status: number, slug: string, title: string, detail?: string) =
   );
 
 const server = setupServer();
+const listeners = new Set<(e: LiveEvent) => void>();
 beforeAll(() => server.listen());
 afterEach(() => server.resetHandlers());
 afterAll(() => server.close());
@@ -49,7 +52,17 @@ async function renderAs(role: "viewer" | "admin" | "owner", list: object[] = [EP
   render(
     <QueryClientProvider client={queryClient}>
       <AuthProvider session={session}>
-        <EndpointsPage />
+        <LiveContext.Provider
+          value={{
+            status: "open",
+            subscribe: (fn) => {
+              listeners.add(fn);
+              return () => listeners.delete(fn);
+            },
+          }}
+        >
+          <EndpointsPage />
+        </LiveContext.Provider>
       </AuthProvider>
     </QueryClientProvider>,
   );
@@ -214,6 +227,22 @@ describe("endpoints: rotate", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: "Rotate" }));
     expect(await within(dialog).findByRole("alert")).toHaveTextContent("A rotation is already in progress");
     expect(screen.queryByTestId("signing-secret")).not.toBeInTheDocument();
+  });
+});
+
+describe("endpoints: live", () => {
+  it("refetches the list when a breaker opens, so the badge changes", async () => {
+    await renderAs("viewer");
+    const until = new Date(Date.now() + 150 * 60_000).toISOString();
+    server.use(
+      http.get(`${origin}/api/v1/endpoints`, () =>
+        HttpResponse.json([{ ...EP, status: "breaker_open", breaker_until: until }]),
+      ),
+    );
+    act(() => {
+      for (const fn of listeners) fn({ type: "breaker", endpoint_id: EP.id, state: "open", until, at: 1 });
+    });
+    expect(await screen.findByText(/Breaker open/)).toHaveTextContent("retry in 2 hours");
   });
 });
 

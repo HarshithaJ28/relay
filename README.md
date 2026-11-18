@@ -139,7 +139,11 @@ Built (`db/migrations`, `services/data-plane/relay_dataplane`):
   the message-ID choice before anything is sent (new ID recommended for a succeeded delivery, the same ID for a
   failed one); a delivery whose payload has expired cannot be replayed and shows the date, also when the server
   answers 410; bulk replay shows the counts (to replay, expired, already succeeded) first, and offers to run only
-  for a preview of exactly the current settings. Health, overview, keys and users are not built yet.
+  for a preview of exactly the current settings. Endpoint health: the breaker as closed, open (with when it is
+  retried) or probing (the pause is over and one delivery is the probe), which turns from open to probing on time
+  without a refetch; a breaker event opens it at once, and since no event marks a close, any delivery event for
+  the endpoint refetches it; plus the 24-hour success rate, active deliveries and errors by class. Overview, keys
+  and users are not built yet.
 - Deployment (`deploy/`, `docs/deploy.md`): Helm charts `relay` (the services, an Ingress for `/api` and
   `/ingest` with a cert-manager certificate from Let's Encrypt, NetworkPolicies, and a `helm test` egress smoke
   test) and `relay-datastores` (single-node
@@ -327,7 +331,7 @@ Control-plane tests (Node 22; the same real PostgreSQL with these migrations, an
 - The breaker's defaults (60 s window, 10 results, 50 % failures, 30 s cool-down up to 10 min) and the tenant
   limits (10 per endpoint, 100 per tenant, 100 events/s with a burst of 200) are provisional; the spec calls for
   choosing them from chaos-receiver experiments, which have not been run.
-- Not built yet: the console's health, overview, keys and users screens,
+- Not built yet: the console's overview, keys and users screens,
   its Cypress, Lighthouse and Faro set-up and Helm entry, the transformation runner and authoring flow, and the AI
   features.
 - The publisher confirms one message at a time; its throughput is unmeasured.
