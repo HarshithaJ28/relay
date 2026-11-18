@@ -142,7 +142,7 @@ export function DeliveriesPage() {
         <p className="text-sm text-muted-foreground">No deliveries match these filters.</p>
       ) : null}
       {rows.length ? (
-        <div className="overflow-x-auto rounded-lg border border-border">
+        <div className="relative overflow-x-auto rounded-lg border border-border">
           <table className="w-full text-left text-sm">
             <thead className="bg-muted text-muted-foreground">
               <tr>

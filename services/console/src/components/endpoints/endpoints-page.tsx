@@ -103,7 +103,7 @@ export function EndpointsPage() {
         </p>
       ) : null}
       {list.data?.length ? (
-        <div className="overflow-x-auto rounded-lg border border-border">
+        <div className="relative overflow-x-auto rounded-lg border border-border">
           <table className="w-full text-left text-sm">
             <thead className="bg-muted text-muted-foreground">
               {table.getHeaderGroups().map((g) => (
