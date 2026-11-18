@@ -19,9 +19,11 @@ import { billingRoutes } from "./routes/billing.js";
 import { catalogRoutes } from "./routes/catalog.js";
 import { deliveryRoutes } from "./routes/deliveries.js";
 import { endpointRoutes } from "./routes/endpoints.js";
+import { statsRoutes } from "./routes/stats.js";
 import { streamRoutes } from "./routes/stream.js";
 import type { Keyring } from "./secrets.js";
 import type { Resolver } from "./ssrf.js";
+import type { JsonCache } from "./statsCache.js";
 
 /** Live updates for one tenant: calls onMessage per event, returns a function that unsubscribes. */
 export type Subscribe = (tenantId: string, onMessage: (json: string) => void) => Promise<() => Promise<void>>;
@@ -34,6 +36,8 @@ export interface Deps {
   loginLimiter: LoginLimiter;
   stripe?: Pick<Stripe, "checkout" | "webhooks">;
   subscribe?: Subscribe;
+  /** Caches GET /api/v1/stats answers (30 s); without it, every request reads the database. */
+  statsCache?: JsonCache;
 }
 
 declare module "fastify" {
@@ -164,6 +168,7 @@ export async function buildApp(deps: Deps): Promise<FastifyInstance> {
       await api.register(deliveryRoutes);
       await api.register(billingRoutes);
       await api.register(streamRoutes);
+      await api.register(statsRoutes);
       api.get("/openapi.json", { schema: { hide: true } }, async () => app.swagger());
     },
     { prefix: "/api/v1" },

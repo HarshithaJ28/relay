@@ -112,6 +112,10 @@ Built (`db/migrations`, `services/data-plane/relay_dataplane`):
   - event types, subscriptions, API keys (shown once, stored as SHA-256) and users;
   - deliveries with filters, cursor pagination and attempts; payloads hidden past retention; single and bulk
     replay with counts before anything runs;
+  - `GET /api/v1/stats` for the overview charts: events, deliveries by status and counted attempts per UTC hour
+    or day, and the success rate (succeeded / (succeeded + dead + cancelled), null when nothing finished); ranges
+    up to 31 days, hourly buckets up to 7; cached 30 s in Valkey per tenant and range. No latency: attempt
+    durations are not stored;
   - plans, usage and Stripe billing (test mode): checkout sessions and signed, idempotent webhooks that move
     a tenant between plans and copy the plan's limits onto it;
   - `GET /api/v1/stream` (server-sent events from Valkey), `/healthz`, `/readyz`, `/metrics`, OpenAPI at
@@ -256,7 +260,8 @@ Control-plane tests (Node 22; the same real PostgreSQL with these migrations, an
   contain message bodies, at DEBUG.
 - Every process serves metrics, health and readiness, its counters reflect its work, and every log line is JSON;
   the dashboard and alert rules reference only exported metrics.
-- Control plane (136 tests, real PostgreSQL and Valkey): invite codes (single use, expiry, a taken email
+- Control plane (146 tests, real PostgreSQL and Valkey): stats range and bucket limits, success rate, cache hits
+  and expiry, tenant isolation; invite codes (single use, expiry, a taken email
   leaves the code usable, three simultaneous registrations with one code give one tenant, only the operator
   role makes codes), login throttling (account and IP locks, unlock after the lock time, a successful login
   clearing the count, unknown emails locked the same way, spoofed `X-Forwarded-For` ignored, 503 when Valkey
