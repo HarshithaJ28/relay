@@ -150,8 +150,8 @@ Built (`db/migrations`, `services/data-plane/relay_dataplane`):
   and a green/red pair both failed it and are not used for data). API keys, users, event types and subscriptions: keys and
   new signing secrets are shown once and dropped from every cache; pages a role cannot use say so; changes are
   hidden from viewers; a taken email or duplicate event type is shown on its field.
-- Deployment (`deploy/`, `docs/deploy.md`): Helm charts `relay` (the services, an Ingress for `/api` and
-  `/ingest` with a cert-manager certificate from Let's Encrypt, NetworkPolicies, and a `helm test` egress smoke
+- Deployment (`deploy/`, `docs/deploy.md`): Helm charts `relay` (the services and console, an Ingress for `/`, `/api`
+  and `/ingest` with a cert-manager certificate from Let's Encrypt, NetworkPolicies, and a `helm test` egress smoke
   test) and `relay-datastores` (single-node
   PostgreSQL, RabbitMQ and Valkey); a migration image (`db/migrate.sh`) that applies each new file in one
   transaction before every install and upgrade; Terraform for one Oracle Always Free k3s machine (state in OCI
@@ -311,7 +311,8 @@ Control-plane tests (Node 22; the same real PostgreSQL with these migrations, an
 - Nothing has been deployed. The Helm charts, Terraform stacks and deploy job exist; the charts were checked with
   `helm lint` and `kubeconform`, and Terraform with `validate` and `tflint`. `infra.yml`'s k3s job installs
   both charts on single-node k3s in CI: the migrations, every rollout, the API through Traefik and the egress
-  smoke test pass there. No Terraform stack has been applied. The datastores run as single
+  smoke test pass there. Its check that the console answers at `/` and leaves `/api` to the API is
+  new and has not run in CI yet; locally the console ran read-only as a non-root user with no capabilities. No Terraform stack has been applied. The datastores run as single
   pods on one node.
 - The processes have run only as local subprocesses with shrunk timings (1 s request timeout, sub-second
   retries), not in a cluster and not with the production defaults. Outages were 5 s long; longer ones and
@@ -337,7 +338,7 @@ Control-plane tests (Node 22; the same real PostgreSQL with these migrations, an
 - The breaker's defaults (60 s window, 10 results, 50 % failures, 30 s cool-down up to 10 min) and the tenant
   limits (10 per endpoint, 100 per tenant, 100 events/s with a burst of 200) are provisional; the spec calls for
   choosing them from chaos-receiver experiments, which have not been run.
-- Not built yet: the console's Cypress, Lighthouse and Faro set-up and Helm entry, the transformation runner and authoring flow, and the AI
+- Not built yet: the console's Cypress, Lighthouse and Faro set-up, the transformation runner and authoring flow, and the AI
   features.
 - The publisher confirms one message at a time; its throughput is unmeasured.
 - Months that already have rows in the default partition stay there; partitions are created ahead of time

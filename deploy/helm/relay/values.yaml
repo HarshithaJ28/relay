@@ -3,7 +3,7 @@
 
 images:
   registry: ghcr.io/harshithaj28
-  # One tag for all three images; the deploy job sets it to the commit's sha-<long> tag.
+  # One tag for all four images; the deploy job sets it to the commit's sha-<long> tag.
   tag: main
   pullPolicy: IfNotPresent
   # Names of docker-registry Secrets, if the GHCR packages are private.
@@ -11,6 +11,7 @@ images:
   dataPlane: relay-data-plane
   controlPlane: relay-control-plane
   migrations: relay-migrations
+  console: relay-console
 
 secrets:
   # Existing Secret with the keys listed in the chart README.
@@ -89,6 +90,12 @@ controlPlane:
   env:
     RELAY_LOG_LEVEL: info
   resources: { requests: { cpu: 100m, memory: 160Mi }, limits: { memory: 384Mi } }
+
+# The web console, served at / on ingress.host (the API stays at /api).
+console:
+  enabled: true
+  replicas: 1
+  resources: { requests: { cpu: 50m, memory: 128Mi }, limits: { memory: 256Mi } }
 
 migrations:
   # Runs before every install and upgrade (Helm hook). Uses the superuser URL in the Secret.

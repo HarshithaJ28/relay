@@ -102,7 +102,8 @@ spec:
     {{- include "relay.np.dns" . | nindent 4 }}
     {{- include "relay.np.to" (dict "root" . "component" "postgres" "port" 5432) | nindent 4 }}
 ---
-# Public entry points: only the ingress controller reaches the API and ingestion.
+# Public entry points: only the ingress controller reaches the API, ingestion and the console.
+# The console has no egress policy of its own, so the default deny leaves it none at all.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -114,7 +115,7 @@ spec:
     matchExpressions:
       - { key: app.kubernetes.io/name, operator: In, values: [relay] }
       - { key: app.kubernetes.io/instance, operator: In, values: [{{ .Release.Name }}] }
-      - { key: app.kubernetes.io/component, operator: In, values: [control-plane, ingest] }
+      - { key: app.kubernetes.io/component, operator: In, values: [control-plane, ingest, console] }
   policyTypes: [Ingress]
   ingress:
     - from:
@@ -126,4 +127,5 @@ spec:
       ports:
         - { protocol: TCP, port: 8080 }
         - { protocol: TCP, port: 8081 }
+        - { protocol: TCP, port: 3000 }
 {{- end }}

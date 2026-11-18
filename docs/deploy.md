@@ -62,7 +62,8 @@ helm test relay -n relay --logs
 - `relay-datastores`: single-node PostgreSQL 16 and RabbitMQ 3.13 on persistent volumes, and
   Valkey 8.1 without persistence. Valkey holds only counters, breaker state and pub/sub, so a
   restart resets rate limits, login locks and breaker windows.
-- `relay`: the six data-plane processes, the control plane and the Ingress. Before every
+- `relay`: the six data-plane processes, the control plane, the console and the Ingress
+  (`/` the console, `/api` the control plane, `/ingest` ingestion, on one host). Before every
   install and upgrade, a hook Job (image `relay-migrations`) applies new migrations, each in
   one transaction, and sets each role's password.
 - `production-values.yaml` is not in git. It sets `ingress.host`, `publicUrl`,
