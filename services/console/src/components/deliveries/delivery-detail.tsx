@@ -2,6 +2,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { ProblemMessage } from "@/components/problem-message";
+import { ReplayButton } from "@/components/replay/replay-button";
 import { type Attempt, deliveryKeys, useDelivery } from "@/lib/api/deliveries";
 import { toProblem } from "@/lib/api/problem";
 import { formatDate } from "@/lib/format";
@@ -48,6 +49,7 @@ export function DeliveryDetailPage({ id }: { id: string }) {
         <h1 className="flex flex-wrap items-center gap-3 text-xl font-semibold">
           Delivery <DeliveryStatusBadge status={d.status} />
         </h1>
+        <ReplayButton delivery={d} />
         <dl className="grid gap-x-6 gap-y-1 text-sm sm:grid-cols-[max-content_1fr]">
           <dt className="text-muted-foreground">ID</dt>
           <dd className="break-all">{d.id}</dd>

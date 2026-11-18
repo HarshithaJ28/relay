@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef } from "react";
 import { ProblemMessage } from "@/components/problem-message";
+import { BulkReplay } from "@/components/replay/bulk-replay";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -71,7 +72,10 @@ export function DeliveriesPage() {
 
   return (
     <section className="space-y-4">
-      <h1 className="text-xl font-semibold">Deliveries</h1>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h1 className="text-xl font-semibold">Deliveries</h1>
+        <BulkReplay filters={filters} />
+      </div>
 
       <form
         aria-label="Filters"

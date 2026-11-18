@@ -135,8 +135,11 @@ Built (`db/migrations`, `services/data-plane/relay_dataplane`):
   cache when the dialog closes. Deliveries screen: filters by endpoint, status and time kept in the URL, cursor
   paging, and live updates (a shown row changes in place; new matching deliveries trigger one debounced refetch);
   the detail page shows the payload, or the date it expired, and every attempt with outcome, HTTP status, error
-  class, time and the gap since the previous one (request durations are not recorded). Replay, health, overview,
-  keys and users are not built yet.
+  class, time and the gap since the previous one (request durations are not recorded). Replay: the dialog explains
+  the message-ID choice before anything is sent (new ID recommended for a succeeded delivery, the same ID for a
+  failed one); a delivery whose payload has expired cannot be replayed and shows the date, also when the server
+  answers 410; bulk replay shows the counts (to replay, expired, already succeeded) first, and offers to run only
+  for a preview of exactly the current settings. Health, overview, keys and users are not built yet.
 - Deployment (`deploy/`, `docs/deploy.md`): Helm charts `relay` (the services, an Ingress for `/api` and
   `/ingest` with a cert-manager certificate from Let's Encrypt, NetworkPolicies, and a `helm test` egress smoke
   test) and `relay-datastores` (single-node
@@ -324,7 +327,7 @@ Control-plane tests (Node 22; the same real PostgreSQL with these migrations, an
 - The breaker's defaults (60 s window, 10 results, 50 % failures, 30 s cool-down up to 10 min) and the tenant
   limits (10 per endpoint, 100 per tenant, 100 events/s with a burst of 200) are provisional; the spec calls for
   choosing them from chaos-receiver experiments, which have not been run.
-- Not built yet: the console's replay, health, overview, keys and users screens,
+- Not built yet: the console's health, overview, keys and users screens,
   its Cypress, Lighthouse and Faro set-up and Helm entry, the transformation runner and authoring flow, and the AI
   features.
 - The publisher confirms one message at a time; its throughput is unmeasured.
