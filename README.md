@@ -129,7 +129,10 @@ Built (`db/migrations`, `services/data-plane/relay_dataplane`):
   problems shown by one component; an API client generated from the control plane's OpenAPI document (CI fails
   if it is stale); and the live stream read with `fetch` and a tested parser, reconnecting with capped backoff and
   refetching after each reconnect. The stream's event types are documented in `docs/stream-events.md`, which a
-  test checks against `live.py`. The data screens are not built yet.
+  test checks against `live.py`. Endpoints screen: list, add, edit, enable and disable, send a test event, rotate the
+  secret (with the overlap explained) and delete, with admin actions hidden from viewers; a URL the SSRF checks
+  refuse is shown on the URL field; the signing secret is shown once with a copy button and dropped from every
+  cache when the dialog closes. The other data screens are not built yet.
 - Deployment (`deploy/`, `docs/deploy.md`): Helm charts `relay` (the services, an Ingress for `/api` and
   `/ingest` with a cert-manager certificate from Let's Encrypt, NetworkPolicies, and a `helm test` egress smoke
   test) and `relay-datastores` (single-node
@@ -317,7 +320,8 @@ Control-plane tests (Node 22; the same real PostgreSQL with these migrations, an
 - The breaker's defaults (60 s window, 10 results, 50 % failures, 30 s cool-down up to 10 min) and the tenant
   limits (10 per endpoint, 100 per tenant, 100 events/s with a burst of 200) are provisional; the spec calls for
   choosing them from chaos-receiver experiments, which have not been run.
-- Not built yet: the console's data screens (endpoints, deliveries, replay, health, overview, keys and users),
+- Not built yet: the console's data screens other than endpoints (deliveries, replay, health, overview, keys and
+  users),
   its Cypress, Lighthouse and Faro set-up and Helm entry, the transformation runner and authoring flow, and the AI
   features.
 - The publisher confirms one message at a time; its throughput is unmeasured.
