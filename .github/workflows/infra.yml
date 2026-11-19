@@ -207,6 +207,12 @@ jobs:
       # One origin: / is the console, /api the control plane, so the refresh cookie works.
       - name: The console answers at / and leaves /api to the control plane
         run: |
+          # Traefik adds the console's route only once its pod is ready, a few seconds after the
+          # rollout: wait for the page (60 s at most) before checking what it serves.
+          for i in $(seq 30); do
+            curl -sf -o /dev/null -H "Host: relay.ci.test" http://127.0.0.1/login && break
+            sleep 2
+          done
           curl -sSf -H "Host: relay.ci.test" http://127.0.0.1/login | grep -q "/_next/static/"
           curl -sSf -H "Host: relay.ci.test" http://127.0.0.1/api/v1/openapi.json | grep -q '"openapi"'
           # An unknown /api path is the API's problem+json 404, not a console page.

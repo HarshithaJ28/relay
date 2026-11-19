@@ -36,9 +36,13 @@ spec:
           readinessProbe:
             httpGet: { path: /login, port: http }
             periodSeconds: 10
+            # The first render after a start can take more than the default 1 s.
+            timeoutSeconds: 3
           livenessProbe:
             httpGet: { path: /login, port: http }
             periodSeconds: 20
+            # The first render after a start can take more than the default 1 s.
+            timeoutSeconds: 3
           resources:
             {{- toYaml .Values.console.resources | nindent 12 }}
           # The root filesystem is read-only; Next.js writes its cache here.
