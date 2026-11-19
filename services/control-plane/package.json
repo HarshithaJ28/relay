@@ -17,7 +17,7 @@
   },
   "dependencies": {
     "@fastify/cookie": "11.1.5",
-    "@fastify/swagger": "9.9.4",
+    "@fastify/swagger": "9.9.5",
     "@node-rs/argon2": "2.2.2",
     "drizzle-orm": "0.45.4",
     "fastify": "5.12.8",
@@ -31,11 +31,11 @@
     "zod": "4.6.7"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.6.7",
-    "@types/node": "22.20.5",
+    "@biomejs/biome": "2.6.8",
+    "@types/node": "26.6.6",
     "@types/pg": "8.23.1",
     "testcontainers": "12.2.1",
-    "typescript": "5.9.3",
+    "typescript": "7.0.2",
     "vitest": "5.1.0"
   }
 }
