@@ -160,7 +160,11 @@ async function main() {
     };
     const args = process.argv.slice(2);
     const cypress = args.includes("--lighthouse")
-      ? spawn(process.execPath, [join(consoleDir, "scripts", "lighthouse.mjs")], { cwd: consoleDir, stdio: "inherit", env })
+      ? spawn(process.execPath, [join(consoleDir, "scripts", "lighthouse.mjs")], {
+          cwd: consoleDir,
+          stdio: "inherit",
+          env,
+        })
       : spawn(
           join(consoleDir, "node_modules", ".bin", "cypress"),
           [args.includes("--open") ? "open" : "run", ...args.filter((a) => a !== "--open")],
