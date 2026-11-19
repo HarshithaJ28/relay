@@ -92,6 +92,66 @@ jobs:
       - name: dependency audit
         run: npm audit --omit=dev --audit-level=moderate
 
+  console:
+    name: Console (TypeScript)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: services/console
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            services/console/package-lock.json
+            services/control-plane/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      # The API types must match the control plane's current OpenAPI document.
+      - name: generated API types are current
+        run: |
+          (cd ../control-plane && npm ci --no-audit --no-fund && npm run build)
+          npm run api:check
+      - name: typecheck
+        run: npm run typecheck
+      - name: lint and format check
+        run: npm run lint
+      - name: tests
+        run: npm test
+      - name: build
+        run: npm run build
+      - name: dependency audit
+        run: npm audit --omit=dev --audit-level=moderate
+      # Cypress against the real control plane on a fresh database (cypress/stack.mjs).
+      - name: end-to-end tests
+        run: |
+          (cd ../.. && docker compose up -d --wait postgres valkey)
+          npm run e2e:typecheck
+          npm run e2e
+      # Lighthouse on the same stack, signed in; minimums in scripts/lighthouse-thresholds.json.
+      - name: Lighthouse
+        run: npm run lighthouse
+      - name: Upload Lighthouse reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: console-lighthouse
+          path: services/console/lighthouse-results
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Upload end-to-end screenshots
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: console-e2e-screenshots
+          path: services/console/cypress/screenshots
+          if-no-files-found: ignore
+          retention-days: 14
+
   audit:
     name: Dependency audit
     runs-on: ubuntu-24.04

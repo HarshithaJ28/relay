@@ -9,6 +9,16 @@ export function createPool(dsn: string, max = 10): Db {
   return pool;
 }
 
+/**
+ * The PostgreSQL error code (such as 23505, unique violation) of a failed query. Drizzle wraps
+ * the driver's error and keeps it as `cause`; plain pg queries throw it directly.
+ */
+export function pgCode(e: unknown): string | undefined {
+  const err = e as { code?: unknown; cause?: { code?: unknown } } | null;
+  const code = err?.code ?? err?.cause?.code;
+  return typeof code === "string" ? code : undefined;
+}
+
 /** libpq keyword DSNs ("host=... user=...") and URLs are both accepted. */
 export function toConnectionString(dsn: string): string {
   if (/^postgres(ql)?:\/\//.test(dsn)) return dsn;

@@ -28,4 +28,10 @@ spec:
           - path: /ingest
             pathType: Prefix
             backend: { service: { name: relay-ingest, port: { name: http } } }
+          {{- if .Values.console.enabled }}
+          # Longest prefix wins, so /api and /ingest never reach the console.
+          - path: /
+            pathType: Prefix
+            backend: { service: { name: relay-console, port: { name: http } } }
+          {{- end }}
 {{- end }}

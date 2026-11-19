@@ -124,6 +124,7 @@ describe("OpenAPI", () => {
       "/api/v1/deliveries/{id}/replay",
       "/api/v1/replays",
       "/api/v1/usage",
+      "/api/v1/stats",
       "/api/v1/billing/checkout-session",
     ]) {
       expect(paths, p).toContain(p);

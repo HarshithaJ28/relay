@@ -112,6 +112,10 @@ Built (`db/migrations`, `services/data-plane/relay_dataplane`):
   - event types, subscriptions, API keys (shown once, stored as SHA-256) and users;
   - deliveries with filters, cursor pagination and attempts; payloads hidden past retention; single and bulk
     replay with counts before anything runs;
+  - `GET /api/v1/stats` for the overview charts: events, deliveries by status and counted attempts per UTC hour
+    or day, and the success rate (succeeded / (succeeded + dead + cancelled), null when nothing finished); ranges
+    up to 31 days, hourly buckets up to 7; cached 30 s in Valkey per tenant and range. No latency: attempt
+    durations are not stored;
   - plans, usage and Stripe billing (test mode): checkout sessions and signed, idempotent webhooks that move
     a tenant between plans and copy the plan's limits onto it;
   - `GET /api/v1/stream` (server-sent events from Valkey), `/healthz`, `/readyz`, `/metrics`, OpenAPI at
@@ -119,8 +123,35 @@ Built (`db/migrations`, `services/data-plane/relay_dataplane`):
   It connects as its own role, `relay_control`, bound by row-level security like ingestion's `relay_tenant`,
   which stays narrower (no endpoint URLs). Functions that run before a tenant is known (register, login lookup,
   session rotation, Stripe events) are owned by the plain role `relay_auth`. `RELAY_VALKEY_URL` is required.
-- Deployment (`deploy/`, `docs/deploy.md`): Helm charts `relay` (the services, an Ingress for `/api` and
-  `/ingest` with a cert-manager certificate from Let's Encrypt, NetworkPolicies, and a `helm test` egress smoke
+- Console (`services/console`, Next.js App Router, in progress): the shell is built. Sign-in with the access
+  token in memory only and a refresh on load and one minute before expiry (one refresh at a time, because the
+  refresh cookie rotates); the lockout's `Retry-After` shown as a countdown; navigation hidden by role; RFC 9457
+  problems shown by one component; an API client generated from the control plane's OpenAPI document (CI fails
+  if it is stale); and the live stream read with `fetch` and a tested parser, reconnecting with capped backoff and
+  refetching after each reconnect. The stream's event types are documented in `docs/stream-events.md`, which a
+  test checks against `live.py`. Endpoints screen: list, add, edit, enable and disable, send a test event, rotate the
+  secret (with the overlap explained) and delete, with admin actions hidden from viewers; a URL the SSRF checks
+  refuse is shown on the URL field; the signing secret is shown once with a copy button and dropped from every
+  cache when the dialog closes. Deliveries screen: filters by endpoint, status and time kept in the URL, cursor
+  paging, and live updates (a shown row changes in place; new matching deliveries trigger one debounced refetch);
+  the detail page shows the payload, or the date it expired, and every attempt with outcome, HTTP status, error
+  class, time and the gap since the previous one (request durations are not recorded). Replay: the dialog explains
+  the message-ID choice before anything is sent (new ID recommended for a succeeded delivery, the same ID for a
+  failed one); a delivery whose payload has expired cannot be replayed and shows the date, also when the server
+  answers 410; bulk replay shows the counts (to replay, expired, already succeeded) first, and offers to run only
+  for a preview of exactly the current settings. Endpoint health: the breaker as closed, open (with when it is
+  retried) or probing (the pause is over and one delivery is the probe), which turns from open to probing on time
+  without a refetch; a breaker event opens it at once, and since no event marks a close, any delivery event for
+  the endpoint refetches it; plus the 24-hour success rate, active deliveries and errors by class. Overview: totals,
+  month-to-date usage against the plan, and charts of events, deliveries by outcome and success rate for the last
+  24 hours, 7 days or 30 days, each with a hover tooltip and a table view. Requests end at a UTC bucket edge so
+  the stats cache is used. Chart colours are categorical slots checked with a colour-vision-deficiency validator
+  (worst adjacent pair ΔE 9.2 in light mode and 9.4 in dark, simulated deuteranopia; the console's teal accent
+  and a green/red pair both failed it and are not used for data). API keys, users, event types and subscriptions: keys and
+  new signing secrets are shown once and dropped from every cache; pages a role cannot use say so; changes are
+  hidden from viewers; a taken email or duplicate event type is shown on its field.
+- Deployment (`deploy/`, `docs/deploy.md`): Helm charts `relay` (the services and console, an Ingress for `/`, `/api`
+  and `/ingest` with a cert-manager certificate from Let's Encrypt, NetworkPolicies, and a `helm test` egress smoke
   test) and `relay-datastores` (single-node
   PostgreSQL, RabbitMQ and Valkey); a migration image (`db/migrate.sh`) that applies each new file in one
   transaction before every install and upgrade; Terraform for one Oracle Always Free k3s machine (state in OCI
@@ -249,7 +280,8 @@ Control-plane tests (Node 22; the same real PostgreSQL with these migrations, an
   contain message bodies, at DEBUG.
 - Every process serves metrics, health and readiness, its counters reflect its work, and every log line is JSON;
   the dashboard and alert rules reference only exported metrics.
-- Control plane (136 tests, real PostgreSQL and Valkey): invite codes (single use, expiry, a taken email
+- Control plane (147 tests, real PostgreSQL and Valkey): stats range and bucket limits, success rate, cache hits
+  and expiry, tenant isolation; invite codes (single use, expiry, a taken email
   leaves the code usable, three simultaneous registrations with one code give one tenant, only the operator
   role makes codes), login throttling (account and IP locks, unlock after the lock time, a successful login
   clearing the count, unknown emails locked the same way, spoofed `X-Forwarded-For` ignored, 503 when Valkey
@@ -257,7 +289,29 @@ Control-plane tests (Node 22; the same real PostgreSQL with these migrations, an
   tampered, expired, foreign-key and foreign-audience tokens refused, roles, the spec's isolation test (another
   tenant calls every route with this tenant's ids and gets 404), SSRF corpus and DNS checks at save time, plan
   limits, secret rotation, AC-3 payload hiding, replay and bulk replay, pagination that never skips rows created
-  in the same millisecond, Stripe signatures and idempotency, and the live stream.
+  in the same millisecond, Stripe signatures and idempotency, the live stream, and a duplicate event type or
+  subscription answered with a 409 problem (the console's end-to-end tests found it was a 500).
+- Console end-to-end (7 Cypress tests, `npm run e2e`): the built console and the real control plane on a fresh
+  database with its migrations, tenants made through operator invites. Sign-in, a session that survives a reload
+  through the same-origin refresh cookie, sign-out, a wrong password; an endpoint's secret shown once, a test
+  event, and replay of a delivery marked dead; event types, subscriptions, an API key shown once, and a viewer's
+  read-only console. No data-plane process runs, so nothing is sent: the replay test marks a delivery dead in the
+  database itself. Removing the role gate, the refresh on load or the replay button each makes a test fail.
+- Console Lighthouse (`npm run lighthouse`, in CI): five pages, signed in, on the production build and the same
+  stack, three runs each with Lighthouse's default mobile emulation (simulated slow 4G, CPU slow-down); the
+  median must reach the minimums in `scripts/lighthouse-thresholds.json`. Measured here: accessibility 100 on
+  every page; best practices 100, except 96 on the login page, where the signed-out session check logs a 401;
+  performance medians 81 (the overview's charts) to 99, lowest single run 78. The minimums (accessibility 100,
+  best practices 96, performance 70) come from those runs, with room for slower CI machines. The first run
+  found light-mode colour contrast below 4.5:1 for primary buttons, success badges and, by calculation, the
+  warning and danger badges; those colours were darkened, and putting the old teal back fails the run.
+- Console browser telemetry (Grafana Faro), off unless the chart's `console.faroUrl` (an HTTPS collector) is set;
+  the console reads it at request time from `/telemetry.json`, so one image serves every deployment, and loads
+  the SDK only when it is on. It sends uncaught errors, unhandled rejections and web vitals with the app name and
+  version; no console output, resource timings, request bodies or user identity, and page URLs and stack-frame
+  file names lose their query and fragment. Checked with 9 unit tests (each guard's mutant fails one) and with
+  the real SDK against a local collector: an error and web vitals arrived, the query string and a console line
+  did not. No Grafana Cloud or other collector has received data from it.
 - Mutation checks: removing each token, sequence, status or lease guard, an off-by-one at the retry limit, or
   marking an outbox row before the broker confirms, makes at least one test fail. The same holds for each
   SSRF guard (25 mutants: the address checks, URL checks, redirects, proxies, cookies, body limit and
@@ -279,7 +333,8 @@ Control-plane tests (Node 22; the same real PostgreSQL with these migrations, an
 - Nothing has been deployed. The Helm charts, Terraform stacks and deploy job exist; the charts were checked with
   `helm lint` and `kubeconform`, and Terraform with `validate` and `tflint`. `infra.yml`'s k3s job installs
   both charts on single-node k3s in CI: the migrations, every rollout, the API through Traefik and the egress
-  smoke test pass there. No Terraform stack has been applied. The datastores run as single
+  smoke test pass there. Its check that the console answers at `/` and leaves `/api` to the API is
+  new and has not run in CI yet; locally the console ran read-only as a non-root user with no capabilities. No Terraform stack has been applied. The datastores run as single
   pods on one node.
 - The processes have run only as local subprocesses with shrunk timings (1 s request timeout, sub-second
   retries), not in a cluster and not with the production defaults. Outages were 5 s long; longer ones and
@@ -305,7 +360,8 @@ Control-plane tests (Node 22; the same real PostgreSQL with these migrations, an
 - The breaker's defaults (60 s window, 10 results, 50 % failures, 30 s cool-down up to 10 min) and the tenant
   limits (10 per endpoint, 100 per tenant, 100 events/s with a burst of 200) are provisional; the spec calls for
   choosing them from chaos-receiver experiments, which have not been run.
-- Not built yet: the console, the transformation runner and authoring flow, and the AI features.
+- Not built yet: the transformation runner and authoring flow, and the AI
+  features.
 - The publisher confirms one message at a time; its throughput is unmeasured.
 - Months that already have rows in the default partition stay there; partitions are created ahead of time
   from then on.

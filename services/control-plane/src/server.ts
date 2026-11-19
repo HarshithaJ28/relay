@@ -6,6 +6,7 @@ import { valkeySubscriber } from "./live.js";
 import { valkeyLoginLimiter } from "./loginLimit.js";
 import { Keyring } from "./secrets.js";
 import { systemResolver } from "./ssrf.js";
+import { valkeyJsonCache } from "./statsCache.js";
 
 async function main(): Promise<number> {
   let config: ReturnType<typeof loadConfig>;
@@ -26,6 +27,7 @@ async function main(): Promise<number> {
     loginLimiter: valkeyLoginLimiter(config.valkeyUrl, config.login),
     ...(config.stripe.secretKey ? { stripe: new Stripe(config.stripe.secretKey) } : {}),
     subscribe: valkeySubscriber(config.valkeyUrl),
+    statsCache: valkeyJsonCache(config.valkeyUrl),
   });
   const stop = async (signal: string) => {
     app.log.info({ signal }, "shutting down");

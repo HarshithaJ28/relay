@@ -114,6 +114,38 @@ describe("endpoints", () => {
     expect(again.statusCode).toBe(409);
   });
 
+  it("a duplicate event type or subscription is a 409 problem, not a server error", async () => {
+    const app = await makeApp();
+    const a = await signup(app);
+    const e = await endpoint(app, a);
+    const addType = () =>
+      app.inject({
+        method: "POST",
+        url: "/api/v1/event-types",
+        headers: bearer(a),
+        payload: { name: "order.paid" },
+      });
+    expect((await addType()).statusCode).toBe(201);
+    const typeAgain = await addType();
+    expect(typeAgain.statusCode).toBe(409);
+    expect(typeAgain.json()).toMatchObject({
+      type: "/problems/exists",
+      title: "That event type already exists",
+    });
+
+    const subscribe = () =>
+      app.inject({
+        method: "POST",
+        url: "/api/v1/subscriptions",
+        headers: bearer(a),
+        payload: { endpoint_id: e.id, event_type: "order.paid" },
+      });
+    expect((await subscribe()).statusCode).toBe(201);
+    const subAgain = await subscribe();
+    expect(subAgain.statusCode).toBe(409);
+    expect(subAgain.json()).toMatchObject({ type: "/problems/exists", title: "Already subscribed" });
+  });
+
   it("deleting keeps history: the endpoint is disabled and unsubscribed", async () => {
     const app = await makeApp();
     const a = await signup(app);

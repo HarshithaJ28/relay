@@ -148,13 +148,14 @@ jobs:
             kubectl -n kube-system rollout status deployment "$d" --timeout=180s
           done
 
-      - name: Build the three images and load them into k3s
+      - name: Build the four images and load them into k3s
         run: |
           docker build -q -f services/data-plane/Dockerfile -t ghcr.io/harshithaj28/relay-data-plane:ci .
           docker build -q -f services/control-plane/Dockerfile -t ghcr.io/harshithaj28/relay-control-plane:ci .
           docker build -q -f db/Dockerfile -t ghcr.io/harshithaj28/relay-migrations:ci .
+          docker build -q -f services/console/Dockerfile -t ghcr.io/harshithaj28/relay-console:ci .
           docker save ghcr.io/harshithaj28/relay-data-plane:ci ghcr.io/harshithaj28/relay-control-plane:ci \
-            ghcr.io/harshithaj28/relay-migrations:ci | sudo k3s ctr images import -
+            ghcr.io/harshithaj28/relay-migrations:ci ghcr.io/harshithaj28/relay-console:ci | sudo k3s ctr images import -
 
       - name: Create the namespace and a throwaway Secret
         run: |
@@ -202,6 +203,15 @@ jobs:
             -d '{"invite_code":"rinv_x","tenant_name":"t","email":"a@example.com","password":"long enough password"}' \
             http://127.0.0.1/api/v1/auth/register)
           test "$code" = "403"
+
+      # One origin: / is the console, /api the control plane, so the refresh cookie works.
+      - name: The console answers at / and leaves /api to the control plane
+        run: |
+          curl -sSf -H "Host: relay.ci.test" http://127.0.0.1/login | grep -q "/_next/static/"
+          curl -sSf -H "Host: relay.ci.test" http://127.0.0.1/api/v1/openapi.json | grep -q '"openapi"'
+          # An unknown /api path is the API's problem+json 404, not a console page.
+          type=$(curl -s -o /dev/null -w "%{content_type}" -H "Host: relay.ci.test" http://127.0.0.1/api/v1/no-such-route)
+          case "$type" in application/problem+json*) ;; *) echo "got $type"; exit 1 ;; esac
 
       - name: Egress smoke test (must be blocked; public HTTPS must work)
         run: helm test relay -n relay --logs --timeout 3m

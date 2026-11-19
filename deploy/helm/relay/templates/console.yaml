@@ -1,0 +1,62 @@
+{{- if .Values.console.enabled }}
+{{- $sel := dict "root" . "component" "console" }}
+# The web console: a Next.js server with no secrets and no outbound connections. The
+# browser calls /api on the same origin, which the Ingress sends to the control plane.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: relay-console
+  labels:
+    {{- include "relay.labels" . | nindent 4 }}
+    {{- include "relay.selector" $sel | nindent 4 }}
+spec:
+  replicas: {{ .Values.console.replicas }}
+  selector:
+    matchLabels:
+      {{- include "relay.selector" $sel | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "relay.labels" . | nindent 8 }}
+        {{- include "relay.selector" $sel | nindent 8 }}
+    spec:
+      {{- include "relay.podSecurity" . | nindent 6 }}
+      containers:
+        - name: console
+          image: {{ include "relay.image" (dict "root" . "name" .Values.images.console) }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          {{- include "relay.containerSecurity" . | nindent 10 }}
+          env:
+            - name: RELAY_VERSION
+              value: {{ .Values.images.tag | quote }}
+            - name: RELAY_FARO_URL
+              value: {{ .Values.console.faroUrl | quote }}
+          ports:
+            - { name: http, containerPort: 3000 }
+          readinessProbe:
+            httpGet: { path: /login, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /login, port: http }
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.console.resources | nindent 12 }}
+          # The root filesystem is read-only; Next.js writes its cache here.
+          volumeMounts:
+            - { name: cache, mountPath: /app/.next/cache }
+      volumes:
+        - name: cache
+          emptyDir: { sizeLimit: 64Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: relay-console
+  labels:
+    {{- include "relay.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "relay.selector" $sel | nindent 4 }}
+  ports:
+    - { name: http, port: 3000, targetPort: http }
+{{- end }}
