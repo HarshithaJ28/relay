@@ -95,6 +95,9 @@ controlPlane:
 console:
   enabled: true
   replicas: 1
+  # Grafana Faro collector for browser errors and web vitals (HTTPS). Empty: off. Browsers
+  # send to it directly; the console pod itself still makes no outbound connections.
+  faroUrl: ""
   resources: { requests: { cpu: 50m, memory: 128Mi }, limits: { memory: 256Mi } }
 
 migrations:

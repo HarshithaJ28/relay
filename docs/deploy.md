@@ -66,6 +66,9 @@ helm test relay -n relay --logs
   (`/` the console, `/api` the control plane, `/ingest` ingestion, on one host). Before every
   install and upgrade, a hook Job (image `relay-migrations`) applies new migrations, each in
   one transaction, and sets each role's password.
+- Browser telemetry: set `console.faroUrl` to a Grafana Faro collector URL (HTTPS) to receive
+  the console's errors and web vitals; leave it empty to keep it off. Browsers send to the
+  collector directly, so the console pod's network policy does not change.
 - `production-values.yaml` is not in git. It sets `ingress.host`, `publicUrl`,
   `tls.issuer: letsencrypt` with `tls.email`, and, in `networkPolicy.extraBlockedCidrs`, the
   node's public IP as a `/32`.

@@ -276,7 +276,10 @@ describe("subscriptions", () => {
     );
     await renderAs(server, "admin", <SubscriptionsPage />);
     const form = await screen.findByRole("form", { name: "Add subscription" });
-    await userEvent.selectOptions(await within(form).findByLabelText("Event type"), "order.refunded");
+    // The form renders before the lists load: wait for the options, not just the selects.
+    await within(form).findByRole("option", { name: "order.refunded" });
+    await within(form).findByRole("option", { name: EP.url });
+    await userEvent.selectOptions(within(form).getByLabelText("Event type"), "order.refunded");
     await userEvent.selectOptions(within(form).getByLabelText("Endpoint"), EP.id);
     await userEvent.click(within(form).getByRole("button", { name: "Subscribe" }));
     await waitFor(() => expect(bodies).toEqual([{ endpoint_id: EP.id, event_type: "order.refunded" }]));

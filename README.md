@@ -305,6 +305,13 @@ Control-plane tests (Node 22; the same real PostgreSQL with these migrations, an
   best practices 96, performance 70) come from those runs, with room for slower CI machines. The first run
   found light-mode colour contrast below 4.5:1 for primary buttons, success badges and, by calculation, the
   warning and danger badges; those colours were darkened, and putting the old teal back fails the run.
+- Console browser telemetry (Grafana Faro), off unless the chart's `console.faroUrl` (an HTTPS collector) is set;
+  the console reads it at request time from `/telemetry.json`, so one image serves every deployment, and loads
+  the SDK only when it is on. It sends uncaught errors, unhandled rejections and web vitals with the app name and
+  version; no console output, resource timings, request bodies or user identity, and page URLs and stack-frame
+  file names lose their query and fragment. Checked with 9 unit tests (each guard's mutant fails one) and with
+  the real SDK against a local collector: an error and web vitals arrived, the query string and a console line
+  did not. No Grafana Cloud or other collector has received data from it.
 - Mutation checks: removing each token, sequence, status or lease guard, an off-by-one at the retry limit, or
   marking an outbox row before the broker confirms, makes at least one test fail. The same holds for each
   SSRF guard (25 mutants: the address checks, URL checks, redirects, proxies, cookies, body limit and
@@ -353,7 +360,7 @@ Control-plane tests (Node 22; the same real PostgreSQL with these migrations, an
 - The breaker's defaults (60 s window, 10 results, 50 % failures, 30 s cool-down up to 10 min) and the tenant
   limits (10 per endpoint, 100 per tenant, 100 events/s with a burst of 200) are provisional; the spec calls for
   choosing them from chaos-receiver experiments, which have not been run.
-- Not built yet: the console's Faro set-up, the transformation runner and authoring flow, and the AI
+- Not built yet: the transformation runner and authoring flow, and the AI
   features.
 - The publisher confirms one message at a time; its throughput is unmeasured.
 - Months that already have rows in the default partition stay there; partitions are created ahead of time

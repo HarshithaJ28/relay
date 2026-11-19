@@ -5,6 +5,7 @@ import { type ReactNode, useState } from "react";
 import { Toaster } from "sonner";
 import { AuthProvider } from "@/lib/auth/context";
 import { LiveProvider } from "@/lib/live/context";
+import { Telemetry } from "@/lib/telemetry/telemetry";
 
 export function Providers({ children }: { children: ReactNode }) {
   const [queryClient] = useState(
@@ -30,6 +31,7 @@ export function Providers({ children }: { children: ReactNode }) {
         </AuthProvider>
       </QueryClientProvider>
       <Toaster richColors closeButton />
+      <Telemetry />
     </ThemeProvider>
   );
 }

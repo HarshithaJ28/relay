@@ -26,6 +26,11 @@ spec:
           image: {{ include "relay.image" (dict "root" . "name" .Values.images.console) }}
           imagePullPolicy: {{ .Values.images.pullPolicy }}
           {{- include "relay.containerSecurity" . | nindent 10 }}
+          env:
+            - name: RELAY_VERSION
+              value: {{ .Values.images.tag | quote }}
+            - name: RELAY_FARO_URL
+              value: {{ .Values.console.faroUrl | quote }}
           ports:
             - { name: http, containerPort: 3000 }
           readinessProbe:
